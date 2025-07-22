@@ -45,7 +45,7 @@ class TextFragmenter:
         """
         prompt = f"""
         You are an expert in text understanding. Your task is to find a natural breaking point in the following text chunk, ensuring it ends at a complete thought or sentence.
-        Please return the text split up into fragments where it makes the most sense to split, while keeping the fragment as close to {500} characters as possible, Important is that thought is finished  
+        Please return the text split up into fragments where it makes the most sense to split, while keeping the fragment as close to {self.target_size} characters as possible, Important is that thought is finished  
         Do not hallucinate, split text according requirements, don't change the text.
 
         Text: "{text_chunk}"
@@ -93,44 +93,56 @@ if __name__ == "__main__":
     # 1. The text you want to process
     long_text_to_split = (
         """
-        ## The Root Cause: Stateless vs. Stateful Requests
-Stateless (Correct for this task): Each API call is brand new and independent. The model only knows what you send in that single request. The Python script we wrote is designed to be stateless.
+Israeli politics is a vibrant, complex, and often turbulent field, shaped by a unique blend of historical legacies, religious and ethnic diversity, ongoing conflict, and democratic principles. Since its establishment in 1948, the State of Israel has developed a robust political system grounded in parliamentary democracy. Yet, the country’s politics are deeply influenced by ideological divisions, security concerns, demographic tensions, and a multiparty system that often results in unstable coalitions. To understand Israeli politics today, one must examine its historical roots, institutional structure, and contemporary challenges.
 
-Stateful (Incorrect for this task): The API call includes previous messages, giving the model a "memory" of the conversation. This is useful for chatbots, but it's causing your current problem.
+Historical Foundations and Institutional Framework
 
-The output proves that a stateful request is being made, sending our conversation history to the model instead of just the specific text you want to fragment.
+The modern Israeli political system emerged after the declaration of independence in 1948, influenced by both European democratic traditions and the practical needs of a new state facing existential threats. The Knesset, Israel’s unicameral parliament, serves as the legislative body and consists of 120 members elected through proportional representation. This system encourages the formation of multiple parties representing a wide range of political, religious, and ethnic identities.
 
-## How Is This Happening?
-There are two likely scenarios causing this:
+The head of state is the president, a largely ceremonial role, while real executive power lies with the prime minister. Since no single party has ever gained a majority in the Knesset, coalitions are a necessity. As a result, even small parties can wield considerable influence, often leading to fragmented and unstable governments.
 
-You're Using a Different Tool: Are you running the .py script directly from your terminal (e.g., python your_script.py)? Or are you copying the prompt and pasting it into a chat application, a web UI, or the Ollama command line (e.g., ollama run phi3)? Many of those tools are stateful by default and automatically include the conversation history.
+Major Political Parties and Ideological Divides
 
-The Code Was Changed: It's possible the payload in the generate_response function was modified to include more messages. For our task, it should be stateless and contain only the single prompt.
-        I've created a comprehensive documentation for your document fragmentation system. The approach leverages your local Ollama setup with Llama/Phi models to intelligently split documents while maintaining semantic coherence.
-Key aspects of the design:
-Core Strategy: The system uses the LLM to identify natural breaking points in the text, ensuring each fragment is semantically complete rather than just mechanically split at arbitrary positions.
-Flexibility: You can set target sizes, but the system prioritizes meaning over exact character counts, allowing fragments to be slightly larger/smaller to maintain coherence.
-Local Processing: Everything runs on your Mac using Ollama, so no data leaves your system.
-The implementation would involve:
+Israel’s political landscape features a broad ideological spectrum, ranging from secular liberalism to ultra-Orthodox Judaism, and from socialist Zionism to religious nationalism. Among the most influential parties are:
+	•	Likud: A center-right to right-wing party led for many years by Benjamin Netanyahu. Likud supports a strong national defense, free-market economics, and a skeptical approach to the peace process with the Palestinians.
+	•	Yesh Atid: A centrist, secular party led by Yair Lapid, advocating for civil rights, middle-class economic relief, and limits on religious influence in public life.
+	•	Labor Party (Avoda): Historically dominant, the Labor Party promoted socialist and Zionist values but has declined in recent decades.
+	•	Religious Zionist Parties: Such as Shas, United Torah Judaism, and Religious Zionism, these parties focus on preserving Jewish religious identity and often support settlement expansion in the West Bank.
+	•	Arab Parties: Including Ra’am and Hadash-Ta’al, these represent Israel’s Arab minority, advocating for civil equality, Palestinian rights, and social justice.
 
-A document processor to extract text from PDFs
-An LLM interface to communicate with your Ollama models
-A fragmentation engine that uses prompts to identify split points
-Size management to balance target size with semantic completeness
+The Role of Religion and Ethnicity
 
-Would you like me to start implementing specific parts of this system, or would you prefer to discuss any particular aspect in more detail? I can create the actual Python code for any component you'd like to begin with.
-Excellent, the traceback you provided tells us exactly what is wrong. This is a very common issue.
+Religion plays a major role in Israeli politics, influencing debates over civil marriage, Sabbath observance, public transportation, and military service exemptions for yeshiva students. Tensions between secular and religious Jews often surface in public discourse and coalition negotiations.
 
-The error 404 Client Error: Not Found for url: http://localhost:11434/api/chat is the key. It means your Python script is trying to send a request to the /api/chat endpoint, but your local Ollama server doesn't have that endpoint.
+Ethnic divisions also affect politics. Israeli society includes Ashkenazi (European-origin) Jews, Mizrahi (Middle Eastern-origin) Jews, Ethiopian Jews, Russian-speaking immigrants, secular and religious communities, and approximately 20% Arab citizens of Israel. Each group brings distinct political preferences and experiences of inclusion or marginalization.
 
-This almost always means you are running an older version of Ollama. The /api/chat endpoint is relatively new. Older versions used a different endpoint called /api/generate.
+The Israeli-Palestinian Conflict
 
-Because the script can't connect to the LLM, it falls back to the simple mechanical split, which is why the output quality is poor.
+At the heart of Israeli politics lies the unresolved Israeli-Palestinian conflict. Political parties diverge sharply on how to address this issue. The left typically supports a two-state solution, negotiations, and territorial compromise, while the right favors security-first approaches, settlement expansion, and maintaining Israeli control over the West Bank.
 
-## Solution 1: Update Ollama (Recommended)
-The best and most future-proof solution is to update your Ollama application to the latest version. This will give you access to the correct /api/chat endpoint and other improvements.
+In recent years, the conflict has been overshadowed by domestic concerns, though periodic escalations—such as conflicts in Gaza or tensions in Jerusalem—reignite debate. Peace talks have largely stalled, and political discourse has shifted toward managing the conflict rather than resolving it.
 
-Open your terminal and run:
+Recent Political Turmoil
+
+The last decade has seen extraordinary political instability. Between 2019 and 2022, Israel held five elections due to deadlocked results and the inability to form stable coalitions. Central to this crisis was the polarizing figure of Benjamin Netanyahu, who faced corruption charges but remained a dominant force. His allies framed the legal cases as a political witch hunt, while opponents argued for the rule of law and judicial independence.
+
+In 2021, an unprecedented “change government” was formed, including right-wing, centrist, left-wing, and even an Arab party (Ra’am) in a fragile coalition. Although it ended Netanyahu’s long rule, it lasted just over a year. In late 2022, Netanyahu returned to power with a far-right coalition, raising concerns domestically and internationally.
+
+Judicial Reform and Public Protests
+
+One of the most contentious issues in recent Israeli politics is judicial reform. The Netanyahu-led government proposed significant changes to the judicial system, including limiting the Supreme Court’s power to review legislation and increasing political control over judicial appointments. Critics argue this threatens democratic checks and balances and weakens protections for minority rights.
+
+Massive public protests erupted throughout 2023, uniting a broad swath of Israeli society—secular, religious, tech workers, reservists, and students—in opposition to the reforms. The protests were among the largest in Israeli history and highlighted deep societal divides over the country’s democratic identity.
+
+Future Outlook
+
+Israeli politics remains dynamic and unpredictable. Key questions loom over the future: Will judicial reforms proceed? Can the country maintain democratic norms amid internal strife? How will regional normalization with Arab states affect the Palestinian issue? Can trust be restored between Israel’s diverse communities?
+
+While the political system has proven resilient, the strain of persistent instability, identity conflicts, and lack of consensus on core issues pose long-term challenges. At the same time, Israel remains a hub of innovation, cultural vibrancy, and civic engagement, suggesting that its political system, though often chaotic, retains the capacity for adaptation and renewal.
+
+Conclusion
+
+Politics in Israel reflect the complexity of a nation shaped by history, conflict, and diversity. With passionate public engagement, a wide ideological range, and pressing domestic and international challenges, Israeli democracy is both vibrant and vulnerable. Understanding its dynamics requires attentiveness to its internal divisions, democratic institutions, and the aspirations of its people—Jewish and Arab, religious and secular, left and right—who together shape the ongoing story of the Israeli state.
         """
     )
 
