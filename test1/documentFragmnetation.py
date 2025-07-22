@@ -44,13 +44,9 @@ class TextFragmenter:
         Uses the LLM to find a natural breaking point, ensuring fragments end at complete thoughts. 
         """
         prompt = f"""
-        You are an expert text editor. Your task is to find the last complete sentence in the given text and trim the text to that point.
-
-        Here is an example:
-        Input Text: "The solar system has eight planets. The largest is Jupiter. The planet Mars is often called the Red Pla"
-        Correct Output: "The solar system has eight planets. The largest is Jupiter."
-
-        Now, process the following text. Return ONLY the corrected text, with no explanations or extra words.
+        You are an expert in text understanding. Your task is to find a natural breaking point in the following text chunk, ensuring it ends at a complete thought or sentence.
+        Please return the text split up into fragments where it makes the most sense to split, while keeping the fragment as close to {500} characters as possible, Important is that thought is finished  
+        Do not hallucinate, split text according requirements, don't change the text.
 
         Text: "{text_chunk}"
         """
