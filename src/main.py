@@ -209,6 +209,27 @@ class PickIdeasStage(EssayStage):
 
 
 class OrganizeStage(EssayStage):
+    def validate_custom_outline(self, essay_data: EssayData) -> List[str]:
+        errors = []
+        outline = essay_data.outline
+        if not outline or not outline.sections:
+            errors.append('Outline has no sections.')
+            return errors
+        titles = [s.title.strip().lower() for s in outline.sections]
+        if 'introduction' not in titles:
+            errors.append('Missing "Introduction" section.')
+        if 'conclusion' not in titles:
+            errors.append('Missing "Conclusion" section.')
+        total = sum(s.word_count for s in outline.sections)
+        target = essay_data.word_count
+        if target:
+            deviation = abs(total - target) / target
+            if deviation > 0.1:
+                errors.append(f'Total word count deviates by {round(deviation * 100)}% ({total}/{target}).')
+        for s in outline.sections:
+            if s.word_count <= 0:
+                errors.append(f'Section "{s.title}" must have a positive word count.')
+        return errors
     """Stage 2: Organize - Generate outline with word distribution"""
     
     def __init__(self):
@@ -318,27 +339,26 @@ class WriteStage(EssayStage):
     
     def _generate_tree_prompts(self, section_title: str) -> Dict[str, str]:
         title_lower = section_title.lower()
-        
         if 'introduction' in title_lower:
             return {
                 'T': 'Topic/Hook sentence - How will you grab attention?',
                 'R': 'Reasons preview - What main points will you cover?',
-                'E': 'Explain context - What background does reader need?',
-                'E': 'End with thesis - State your clear position'
+                'E1': 'Explain context - What background does reader need?',
+                'E2': 'End with thesis - State your clear position'
             }
         elif 'conclusion' in title_lower:
             return {
                 'T': 'Topic sentence - Restate thesis in new words',
                 'R': 'Recap main reasons - Summarize key arguments',
-                'E': 'Explain significance - Why does this matter?',
-                'E': 'End strong - Final thought or call to action'
+                'E1': 'Explain significance - Why does this matter?',
+                'E2': 'End strong - Final thought or call to action'
             }
         else:
             return {
                 'T': 'Topic sentence - State main claim for this paragraph',
                 'R': 'Reasons/Evidence - What supports this claim?',
-                'E': 'Explain/Analyze - How does evidence prove your point?',
-                'E': 'End/Transition - Connect to next paragraph'
+                'E1': 'Explain/Analyze - How does evidence prove your point?',
+                'E2': 'End/Transition - Connect to next paragraph'
             }
     
     def _display_writing_guidance(self, essay_data: EssayData):
@@ -1081,13 +1101,17 @@ Yet alongside these remarkable benefits, social media has introduced troubling o
 The transformation of communication itself reveals perhaps the most significant impact of social media platforms. Where previous generations developed patience for delayed responses and learned to express complex ideas through extended conversation, digital natives often communicate in abbreviated bursts optimized for platform constraints. The art of nuanced discussion becomes difficult when complex issues must be reduced to character limits or competing for attention against algorithmic feeds designed to promote the most emotionally provocative content. While this efficiency has its advantages, it has also contributed to the polarization of public discourse and the decline of the contemplative, measured dialogue that democratic societies require to address challenging issues collaboratively.
             """.strip())
             
-            # Add conclusion
+            # Add fourth body paragraph  
             task.add_section_content(4, """
+Beyond individual behavior, platform design choices reshape how communication unfolds. Attention-optimizing algorithms privilege content that triggers quick emotional reactions, creating incentives for sensationalism over nuance. Features like infinite scroll, typing indicators, and ephemeral stories compress response time and train users to value speed over reflection. Privacy trade‑offs and data‑driven targeting further influence what people say and to whom, often segmenting audiences into micro‑publics that rarely intersect. At the same time, product interventions—friction for resharing, context labels, and chronological feeds—show that better communication outcomes can be designed on purpose. Treating feeds as civic infrastructure rather than mere entertainment reframes the responsibility of platforms toward healthier, more deliberative discourse.
+            """.strip())
+
+            # Add conclusion
+            task.add_section_content(5, """
 As we navigate this digital transformation, we must resist both uncritical enthusiasm and reflexive rejection of social media's role in modern communication. These platforms represent powerful tools that reflect human nature itself - capable of fostering both connection and division, understanding and misunderstanding, progress and regression. The key lies not in abandoning these technologies, but in developing digital literacy that helps users harness their connective power while remaining aware of their limitations. By acknowledging both the unprecedented opportunities and genuine challenges that social media presents, we can work toward a future where technology enhances rather than replaces the deep, authentic communication that human relationships require to flourish.
             """.strip())
-            
+
             print('\n--- CONTENT ADDITION COMPLETED ---')
-            
             # Advance to revision stage
             result = self.manager.advance_task(task.id)
             print(f'\nStage 4 result: {result}')
@@ -1100,9 +1124,93 @@ As we navigate this digital transformation, we must resist both uncritical enthu
             # Show full essay
             print('\n--- COMPLETE ESSAY ---')
             print(task.get_full_essay_text())
-            
         except Exception as error:
             print(f'❌ Demo failed: {error}')
+    def run_interactive(self):
+        """Interactive CLI: ask the user for thesis, outline, and section drafts, validating at each step."""
+        print('🧑‍💻 INTERACTIVE ESSAY ASSISTANT')
+        print('===============================')
+        try:
+            # Gather basic params
+            topic = input('Topic: ').strip()
+            essay_type = input('Essay type (opinion/analytical/comparative/interpretive): ').strip().lower()
+            word_count = int(input('Target word count (100-5000): ').strip())
+            days_until_deadline = int(input('Days until deadline (>=1): ').strip())
+            deadline = (datetime.now() + timedelta(days=days_until_deadline)).isoformat()
+
+            # Create and start task
+            task = self.manager.create_task('essay', {
+                'topic': topic,
+                'essay_type': essay_type,
+                'word_count': word_count,
+                'deadline': deadline
+            })
+            self.manager.start_task(task.id)
+
+            # Stage 1: thesis
+            thesis = input('\nEnter your thesis (1-2 sentences): ').strip()
+            task.set_thesis(thesis)
+            self.manager.advance_task(task.id)  # -> Stage 2
+
+            # Stage 2: outline (auto + optional user override with validation)
+            print('\nAn outline has been generated above.')
+            use_custom = input('Paste your own outline? (y/N): ').strip().lower() == 'y'
+            if use_custom:
+                print('\nEnter one section per line as:')
+                print('Title | word_count | guiding question (optional)')
+                print('Finish with a blank line.')
+                custom_sections = []
+                while True:
+                    line = input()
+                    if not line.strip():
+                        break
+                    parts = [p.strip() for p in line.split('|')]
+                    title = parts[0] if parts else ''
+                    wc = int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 0
+                    gq = parts[2] if len(parts) > 2 else ''
+                    custom_sections.append(OutlineSection(title=title, word_count=wc, guiding_question=gq))
+                if custom_sections:
+                    task.essay_data.outline = Outline(sections=custom_sections)
+                    org = OrganizeStage()
+                    errors = org.validate_custom_outline(task.essay_data)
+                    if errors:
+                        print('\nOutline issues found:')
+                        for e in errors:
+                            print(f' - {e}')
+                        fallback = input('Use auto-generated outline instead? (Y/n): ').strip().lower()
+                        if fallback != 'n':
+                            task.essay_data.outline = org._generate_outline(task.essay_data)
+                            print('✓ Using auto-generated outline.')
+                    else:
+                        print('✓ Custom outline validated.')
+
+            # Advance to Stage 3 and collect content for each section
+            self.manager.advance_task(task.id)  # -> Stage 3
+            for idx, sec in enumerate(task.essay_data.sections):
+                print(f'\n--- {sec.title} (target {sec.target_words} words) ---')
+                if sec.guiding_question:
+                    print('Guiding question:', sec.guiding_question)
+                if sec.tree_prompts:
+                    print('TREE prompts:', ', '.join(sec.tree_prompts.values()))
+                print('Enter content. End with a single line containing only: END')
+                lines = []
+                while True:
+                    line = input()
+                    if line.strip() == 'END':
+                        break
+                    lines.append(line)
+                content = '\n'.join(lines).strip()
+                task.add_section_content(idx, content)
+
+            # Advance to Stage 4 (Revise) and show summary
+            self.manager.advance_task(task.id)  # -> Stage 4
+            status = self.manager.get_task_status(task.id)
+            print('\n--- TASK SUMMARY ---')
+            print(json.dumps(status, indent=2, default=str))
+            print('\n--- FULL ESSAY ---')
+            print(task.get_full_essay_text())
+        except Exception as e:
+            print(f'❌ Interactive session failed: {e}')
     
     def test_components(self):
         """Test individual components"""
@@ -1150,16 +1258,14 @@ As we navigate this digital transformation, we must resist both uncritical enthu
 
 if __name__ == '__main__':
     demo = EssayAssistantDemo()
-    
-    # Run component tests first
-    demo.test_components()
-    
-    # Wait a moment, then run full demo
-    print('\n' + '='*50)
-    print('STARTING FULL DEMO IN 2 SECONDS...')
-    print('='*50)
-    
-    import time
-    time.sleep(2)
-    
-    demo.run_full_demo()
+    print('Select mode:')
+    print('1) Test components')
+    print('2) Interactive assistant')
+    print('3) Full demo')
+    choice = input('Enter 1/2/3 (default 2): ').strip() or '2'
+    if choice == '1':
+        demo.test_components()
+    elif choice == '3':
+        demo.run_full_demo()
+    else:
+        demo.run_interactive()
