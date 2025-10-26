@@ -1438,6 +1438,80 @@ As we navigate this digital transformation, we must resist both uncritical enthu
         
         print('\n✅ Component tests completed successfully!')
 
+    def run_reading_demo(self):
+        """Interactive Reading Assistant demo: collect texts and read interleaved paragraphs."""
+        print('📖 READING ASSISTANT (Interactive)')
+        print('=================================')
+        try:
+            # Collect texts
+            while True:
+                n_raw = input('How many texts do you want to read (>=1)? ').strip()
+                if not n_raw:
+                    n_raw = '2'
+                if n_raw.isdigit() and int(n_raw) >= 1:
+                    n = int(n_raw)
+                    break
+                print('Please enter a number >= 1.')
+
+            texts: List[Dict[str, Any]] = []
+            for i in range(n):
+                print(f"\n--- Text {i+1} ---")
+                title = input('Title (optional, default auto): ').strip() or f'Text {i+1}'
+                print('Paste the text. End input with a single line containing only: END')
+                lines = []
+                while True:
+                    line = input()
+                    if line.strip() == 'END':
+                        break
+                    lines.append(line)
+                text_content = '\n'.join(lines).strip()
+                texts.append({'id': f'text_{i+1}', 'title': title, 'text': text_content})
+
+            # Options
+            seed_input = input('\nSeed for shuffle (leave blank for random): ').strip()
+            seed: Optional[Any] = None
+            if seed_input:
+                seed = int(seed_input) if seed_input.isdigit() else seed_input
+            shuffle = input('Shuffle order each paragraph round? (Y/n): ').strip().lower() != 'n'
+
+            # Create and start task
+            task = self.manager.create_task('reading', {
+                'texts': texts,
+                'seed': seed,
+                'shuffle_each_round': shuffle
+            })
+            preview = self.manager.start_task(task.id)
+            print('\nReady! Press Enter for next chunk, or type q then Enter to quit.')
+            if preview.get('next_chunk_meta'):
+                m = preview['next_chunk_meta']
+                print(f"Next up → {m['source_title']} (paragraph {m['paragraph_index']}/{m['total_paragraphs_for_source']})")
+
+            # Iterate through chunks
+            while True:
+                cmd = input()
+                if cmd.strip().lower() == 'q':
+                    break
+                out = self.manager.advance_task(task.id)
+                if out.get('completed'):
+                    print('✓ Done. No more chunks.')
+                    break
+                c = out['chunk']
+                print(f"[{out['chunk_number']}/{out['total_chunks']}] {c['source_title']} — paragraph {c['paragraph_index']}/{c['total_paragraphs_for_source']}\n{c['text']}\n")
+        except Exception as e:
+            print(f'❌ Reading demo failed: {e}')
+
+    def run_task_selector(self):
+        """Small selector to choose between Essay and Reading assistance."""
+        print('🎯 CHOOSE TASK')
+        print('==============')
+        print('1) Essay Assistance')
+        print('2) Reading Assistance')
+        choice = input('Enter 1/2 (default 1): ').strip() or '1'
+        if choice == '2':
+            self.run_reading_demo()
+        else:
+            self.run_interactive()
+
 
 # ========== MAIN EXECUTION ==========
 
@@ -1445,12 +1519,15 @@ if __name__ == '__main__':
     demo = EssayAssistantDemo()
     print('Select mode:')
     print('1) Test components')
-    print('2) Interactive assistant')
-    print('3) Full demo')
-    choice = input('Enter 1/2/3 (default 2): ').strip() or '2'
+    print('2) Interactive (choose task)')
+    print('3) Essay full demo')
+    print('4) Reading demo')
+    choice = input('Enter 1/2/3/4 (default 2): ').strip() or '2'
     if choice == '1':
         demo.test_components()
     elif choice == '3':
         demo.run_full_demo()
+    elif choice == '4':
+        demo.run_reading_demo()
     else:
-        demo.run_interactive()
+        demo.run_task_selector()
