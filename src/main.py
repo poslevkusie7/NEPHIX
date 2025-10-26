@@ -7,7 +7,9 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
+
 import uuid
+import random
 
 
 # ========== BASE TASK SYSTEM ==========
@@ -66,7 +68,7 @@ class TaskFactory:
         if task_type == 'essay':
             return EssayAssistantTask(params)
         elif task_type == 'reading':
-            raise NotImplementedError('Reading assistant not implemented yet')
+            return ReadingAssistantTask(params)
         else:
             raise ValueError(f"Unknown task type: {task_type}")
 
@@ -977,6 +979,185 @@ class EssayAssistantTask(Task):
         )
 
 
+ # ========== READING ASSISTANT TASK ==========
+ 
+@dataclass
+class ReadingChunk:
+    source_id: str
+    source_title: str
+    paragraph_index: int  # 1-based index
+    total_paragraphs_for_source: int
+    text: str
+
+class ReadingAssistantTask(Task):
+    """Task that helps read multiple texts by interleaving their paragraphs.
+
+    Parameters expected in `params`:
+    - texts: List[str] or List[dict{text: str, title?: str, id?: str}]
+    - seed: Optional[int | str] (for reproducible shuffling)
+    - shuffle_each_round: bool = True (shuffle order of sources for each paragraph layer)
+    - sentences_per_fallback_paragraph: int = 8 (when a text has no blank lines)
+    """
+
+    def __init__(self, params: Dict[str, Any]):
+        super().__init__(params)
+        self.sources: List[Dict[str, Any]] = []  # each: {id, title, paragraphs}
+        self.queue: List[ReadingChunk] = []
+        self.current_index: int = 0
+        self.shuffle_each_round: bool = True
+        self._rng: random.Random = random.Random()
+
+    # ---- lifecycle ----
+    def validate_params(self) -> bool:
+        texts = self.params.get('texts')
+        if not isinstance(texts, list) or not texts:
+            raise ValueError('Reading task requires "texts": list[str] or list[dict{text, title?, id?}]')
+
+        normalized_sources: List[Dict[str, Any]] = []
+        for i, item in enumerate(texts, start=1):
+            if isinstance(item, str):
+                text = item
+                title = f'Text {i}'
+                sid = f'text_{i}'
+            elif isinstance(item, dict) and 'text' in item:
+                text = str(item.get('text', ''))
+                title = str(item.get('title') or f'Text {i}')
+                sid = str(item.get('id') or f'text_{i}')
+            else:
+                raise ValueError(f'Invalid item at index {i-1}: must be str or dict with "text" key')
+
+            if not text or not text.strip():
+                continue  # skip empties silently
+            paragraphs = self._split_into_paragraphs(text)
+            normalized_sources.append({'id': sid, 'title': title, 'paragraphs': paragraphs})
+
+        if not normalized_sources:
+            raise ValueError('No non-empty texts provided')
+
+        self.sources = normalized_sources
+        self.shuffle_each_round = bool(self.params.get('shuffle_each_round', True))
+        seed = self.params.get('seed', None)
+        self._rng = random.Random(seed) if seed is not None else random.Random()
+        return True
+
+    def start(self) -> Dict[str, Any]:
+        self.validate_params()
+        self.status = TaskStatus.ACTIVE
+        self._build_queue()
+
+        print('\n📚 STARTING READING ASSISTANT')
+        print('=============================')
+        print(f'Sources: {len(self.sources)}')
+        for i, s in enumerate(self.sources, 1):
+            print(f"   {i}. {s['title']} ({len(s['paragraphs'])} paragraphs)")
+        print(f'Total interleaved chunks: {len(self.queue)}')
+
+        return self._preview_next()
+
+    # ---- public API ----
+    def get_next_chunk(self) -> Dict[str, Any]:
+        """Return the next interleaved paragraph chunk (and advance)."""
+        if self.current_index >= len(self.queue):
+            self.status = TaskStatus.COMPLETED
+            return {'completed': True, 'message': 'No more chunks.'}
+        chunk = self.queue[self.current_index]
+        self.current_index += 1
+        if self.current_index >= len(self.queue):
+            self.status = TaskStatus.COMPLETED
+        return {
+            'chunk_number': self.current_index,
+            'total_chunks': len(self.queue),
+            'chunk': chunk.__dict__,
+            'remaining': len(self.queue) - self.current_index,
+            'completed': self.status == TaskStatus.COMPLETED
+        }
+
+    def get_reading_status(self) -> Dict[str, Any]:
+        """Detailed status for TaskManager.get_task_status()."""
+        next_meta = None
+        if self.current_index < len(self.queue):
+            nxt = self.queue[self.current_index]
+            next_meta = {
+                'source_id': nxt.source_id,
+                'source_title': nxt.source_title,
+                'paragraph_index': nxt.paragraph_index,
+                'total_paragraphs_for_source': nxt.total_paragraphs_for_source
+            }
+        return {
+            'task_id': self.id,
+            'status': self.status.value,
+            'type': self.type,
+            'progress': f"{round((self.current_index / max(1, len(self.queue))) * 100)}%",
+            'sources': [
+                {
+                    'id': s['id'],
+                    'title': s['title'],
+                    'paragraphs': len(s['paragraphs'])
+                } for s in self.sources
+            ],
+            'delivered': self.current_index,
+            'remaining': max(0, len(self.queue) - self.current_index),
+            'total_chunks': len(self.queue),
+            'next_chunk': next_meta
+        }
+
+    # ---- internals ----
+    def _split_into_paragraphs(self, text: str) -> List[str]:
+        # Normalize newlines
+        normalized = re.sub(r'\r\n?', '\n', text)
+        normalized = re.sub(r'\n{3,}', '\n\n', normalized)
+        paragraphs = [p.strip() for p in re.split(r'\n\s*\n', normalized) if p.strip()]
+
+        # Fallback: if there is a single very long block, chunk by sentences
+        if len(paragraphs) == 1:
+            sentences = re.split(r'(?<=[.!?])\s+', paragraphs[0])
+            max_sent = int(self.params.get('sentences_per_fallback_paragraph', 8))
+            if len(sentences) > max_sent:
+                paragraphs = [
+                    ' '.join(sentences[i:i+max_sent]).strip()
+                    for i in range(0, len(sentences), max_sent)
+                ]
+                paragraphs = [p for p in paragraphs if p]
+        return paragraphs
+
+    def _build_queue(self) -> None:
+        max_len = max(len(s['paragraphs']) for s in self.sources)
+        queue: List[ReadingChunk] = []
+        for p_idx in range(max_len):
+            order = [i for i, s in enumerate(self.sources) if p_idx < len(s['paragraphs'])]
+            if self.shuffle_each_round and len(order) > 1:
+                self._rng.shuffle(order)
+            for i in order:
+                s = self.sources[i]
+                queue.append(
+                    ReadingChunk(
+                        source_id=s['id'],
+                        source_title=s['title'],
+                        paragraph_index=p_idx + 1,
+                        total_paragraphs_for_source=len(s['paragraphs']),
+                        text=s['paragraphs'][p_idx]
+                    )
+                )
+        self.queue = queue
+        self.current_index = 0
+
+    def _preview_next(self) -> Dict[str, Any]:
+        if self.current_index >= len(self.queue):
+            self.status = TaskStatus.COMPLETED
+            return {'completed': True, 'message': 'All chunks delivered', 'remaining': 0}
+        nxt = self.queue[self.current_index]
+        return {
+            'ready': True,
+            'message': 'Use TaskManager.advance_task(task_id) to pull the next chunk.',
+            'next_chunk_meta': {
+                'source_id': nxt.source_id,
+                'source_title': nxt.source_title,
+                'paragraph_index': nxt.paragraph_index,
+                'total_paragraphs_for_source': nxt.total_paragraphs_for_source
+            },
+            'remaining': len(self.queue) - self.current_index
+        }
+
 # ========== TASK MANAGER ==========
 
 class TaskManager:
@@ -1003,10 +1184,12 @@ class TaskManager:
         return task.start()
     
     def advance_task(self, task_id: str) -> Dict[str, Any]:
-        """Advance a task to next stage"""
+        """Advance a task to next stage or fetch next chunk for reading tasks"""
         task = self.get_task(task_id)
         if isinstance(task, EssayAssistantTask):
             return task.next_stage()
+        elif isinstance(task, ReadingAssistantTask):
+            return task.get_next_chunk()
         else:
             raise ValueError('Task type does not support stage advancement')
     
@@ -1015,6 +1198,8 @@ class TaskManager:
         task = self.get_task(task_id)
         if isinstance(task, EssayAssistantTask):
             return task.get_essay_status()
+        elif isinstance(task, ReadingAssistantTask):
+            return task.get_reading_status()
         else:
             return task.save()
     
