@@ -1,4 +1,3 @@
-# ui_app.py
 import streamlit as st
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
@@ -18,6 +17,33 @@ if "task_manager" not in st.session_state:
 
 if "current_task_id" not in st.session_state:
     st.session_state.current_task_id = None
+
+
+# --------- Helper: render common stage UI lines ---------
+
+def render_ui_lines(payload: Dict[str, Any]) -> None:
+    """Render ui_lines and basic stage/context info if present."""
+    stage = payload.get("stage")
+    context = payload.get("context")
+    ui_lines = payload.get("ui_lines")
+
+    if stage:
+        st.subheader(f"Stage {stage.get('number', '?')}: {stage.get('name', '')}")
+
+    if context:
+        topic = context.get("topic")
+        essay_type = context.get("essay_type")
+        if topic:
+            st.write(f"**Topic:** {topic}")
+        if essay_type:
+            st.write(f"**Essay type:** {essay_type}")
+
+    if ui_lines:
+        for line in ui_lines:
+            if line.strip():
+                st.write(line)
+            else:
+                st.write("")
 
 
 # --------- Essay UI: create task ---------
@@ -63,8 +89,16 @@ def create_essay_task_ui():
         result = manager.start_task(task.id)
 
         st.success(f"Created essay task `{task.id}`")
-        st.write("Initial stage response:")
-        st.json(result)
+
+        # Show initial stage info from backend
+        render_ui_lines(result)
+        with st.expander("Raw response (debug)", expanded=False):
+            st.json(result)
+
+        # 🔽 Immediately show the specialised "solve" UI for this task
+        st.markdown("---")
+        st.info("Continue working on this essay below:")
+        essay_stage_controls()  # uses current_task_id from session
 
 
 def essay_stage_controls():
@@ -92,13 +126,16 @@ def essay_stage_controls():
             try:
                 res = task.set_thesis(thesis)
                 st.success(res["message"])
+                render_ui_lines(res)
             except Exception as e:
                 st.error(str(e))
         if col2.button("Next stage ▶"):
             try:
                 res = manager.advance_task(task_id)
                 st.success("Moved to next stage")
-                st.json(res)
+                render_ui_lines(res)
+                with st.expander("Raw response (debug)", expanded=False):
+                    st.json(res)
             except Exception as e:
                 st.error(str(e))
 
@@ -109,7 +146,9 @@ def essay_stage_controls():
             try:
                 res2 = manager.advance_task(task_id)  # 2 -> 3
                 st.success("Outline generated. Moved to Write stage.")
-                st.json(res2)
+                render_ui_lines(res2)
+                with st.expander("Raw response (debug)", expanded=False):
+                    st.json(res2)
             except Exception as e:
                 st.error(str(e))
 
@@ -155,7 +194,9 @@ def essay_stage_controls():
             try:
                 res = manager.advance_task(task_id)  # 3 -> 4
                 st.success("Moved to Revise stage.")
-                st.json(res)
+                render_ui_lines(res)
+                with st.expander("Raw response (debug)", expanded=False):
+                    st.json(res)
             except Exception as e:
                 st.error(str(e))
 
@@ -165,13 +206,12 @@ def essay_stage_controls():
 
         if st.button("Run revision passes"):
             try:
-                # You can either:
-                # 1) call manager.advance_task if revision runs in next_stage, OR
-                # 2) call the stage directly (as below).
                 revise_stage = task.stages[3]
                 res = revise_stage.execute(task.essay_data)
                 st.success("Revision done.")
-                st.json(res)
+                render_ui_lines(res)
+                with st.expander("Raw response (debug)", expanded=False):
+                    st.json(res)
             except Exception as e:
                 st.error(str(e))
 
@@ -242,8 +282,15 @@ def create_reading_task_ui():
         st.session_state.current_task_id = task.id
         preview = manager.start_task(task.id)
         st.success(f"Created reading task `{task.id}`")
-        st.write("Preview of next chunk:")
-        st.json(preview)
+
+        render_ui_lines(preview)
+        with st.expander("Raw response (debug)", expanded=False):
+            st.json(preview)
+
+        # 🔽 Immediately show specialised "solve" UI for reading
+        st.markdown("---")
+        st.info("Start reading with interleaved chunks below:")
+        reading_controls()
 
 
 def reading_controls():
