@@ -1,0 +1,335 @@
+# ui_app.py
+import streamlit as st
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
+
+from assistant_core import (
+    TaskManager,
+    EssayAssistantTask,
+    ReadingAssistantTask,
+    TaskStatus,
+)
+
+
+# --------- Session state setup ---------
+
+if "task_manager" not in st.session_state:
+    st.session_state.task_manager = TaskManager()
+
+if "current_task_id" not in st.session_state:
+    st.session_state.current_task_id = None
+
+
+# --------- Essay UI: create task ---------
+
+def create_essay_task_ui():
+    st.header("📄 Essay Assistant")
+
+    with st.form("essay_form"):
+        topic = st.text_input(
+            "Topic",
+            "The impact of social media on modern communication"
+        )
+        essay_type = st.selectbox(
+            "Essay type",
+            ["opinion", "analytical", "comparative", "interpretive"],
+            index=0,
+        )
+        word_count = st.number_input(
+            "Target word count",
+            min_value=100,
+            max_value=5000,
+            value=1000,
+            step=50,
+        )
+        days = st.number_input(
+            "Days until deadline",
+            min_value=1,
+            value=5,
+            step=1,
+        )
+        submitted = st.form_submit_button("Create Essay Task")
+
+    if submitted:
+        deadline = (datetime.now() + timedelta(days=int(days))).isoformat()
+        manager: TaskManager = st.session_state.task_manager
+        task = manager.create_task("essay", {
+            "topic": topic,
+            "essay_type": essay_type,
+            "word_count": int(word_count),
+            "deadline": deadline,
+        })
+        st.session_state.current_task_id = task.id
+        result = manager.start_task(task.id)
+
+        st.success(f"Created essay task `{task.id}`")
+        st.write("Initial stage response:")
+        st.json(result)
+
+
+def essay_stage_controls():
+    manager: TaskManager = st.session_state.task_manager
+    task_id = st.session_state.current_task_id
+    task = manager.get_task(task_id)
+    assert isinstance(task, EssayAssistantTask)
+
+    status = task.get_essay_status()
+    st.subheader("Essay Status")
+    st.json(status)
+
+    stage_name = status["stage_name"]
+    current_stage = status["current_stage"]
+    st.markdown(f"### Current Stage: {current_stage} – {stage_name}")
+
+    # Stage 1: thesis
+    if current_stage == 1:
+        thesis = st.text_area(
+            "Enter thesis (1–2 sentences)",
+            value=task.essay_data.thesis or "",
+        )
+        col1, col2 = st.columns(2)
+        if col1.button("Set thesis"):
+            try:
+                res = task.set_thesis(thesis)
+                st.success(res["message"])
+            except Exception as e:
+                st.error(str(e))
+        if col2.button("Next stage ▶"):
+            try:
+                res = manager.advance_task(task_id)
+                st.success("Moved to next stage")
+                st.json(res)
+            except Exception as e:
+                st.error(str(e))
+
+    # Stage 2: Organize
+    elif current_stage == 2:
+        st.write("Outline will be generated from topic + word count.")
+        if st.button("Generate outline & go to Write stage ▶"):
+            try:
+                res2 = manager.advance_task(task_id)  # 2 -> 3
+                st.success("Outline generated. Moved to Write stage.")
+                st.json(res2)
+            except Exception as e:
+                st.error(str(e))
+
+    # Stage 3: Write
+    elif current_stage == 3:
+        st.write("Fill content for each section.")
+
+        sections = task.essay_data.sections
+        if not sections:
+            st.info("No sections initialized yet. Try advancing to this stage again.")
+            return
+
+        for idx, sec in enumerate(sections):
+            with st.expander(
+                f"{idx + 1}. {sec.title} (target {sec.target_words} words)",
+                expanded=False,
+            ):
+                if sec.guiding_question:
+                    st.caption(sec.guiding_question)
+                if sec.tree_prompts:
+                    st.markdown("**TREE prompts:**")
+                    for key, text in sec.tree_prompts.items():
+                        st.write(f"- **{key}**: {text}")
+
+                default_text = sec.content or ""
+                new_text = st.text_area(
+                    f"Content for {sec.title}",
+                    value=default_text,
+                    key=f"section_{idx}",
+                    height=180,
+                )
+                if st.button(f"Save section {idx + 1}", key=f"save_{idx}"):
+                    try:
+                        res = task.add_section_content(idx, new_text)
+                        st.success(
+                            f"Saved. Section completed: {res['completed']}. "
+                            f"All sections done: {res['total_completed']}"
+                        )
+                    except Exception as e:
+                        st.error(str(e))
+
+        if st.button("All sections done → Revise ▶"):
+            try:
+                res = manager.advance_task(task_id)  # 3 -> 4
+                st.success("Moved to Revise stage.")
+                st.json(res)
+            except Exception as e:
+                st.error(str(e))
+
+    # Stage 4: Revise
+    elif current_stage == 4:
+        st.write("Run revision and see issues.")
+
+        if st.button("Run revision passes"):
+            try:
+                # You can either:
+                # 1) call manager.advance_task if revision runs in next_stage, OR
+                # 2) call the stage directly (as below).
+                revise_stage = task.stages[3]
+                res = revise_stage.execute(task.essay_data)
+                st.success("Revision done.")
+                st.json(res)
+            except Exception as e:
+                st.error(str(e))
+
+        issues = task.essay_data.revision_passes
+        if issues:
+            st.subheader("Revision issues")
+            for issue in issues:
+                st.markdown(
+                    f"- **[{issue.severity}]** `{issue.issue_type}` at *{issue.location}*: "
+                    f"{issue.description}"
+                )
+        else:
+            st.info("No issues recorded yet.")
+
+        if st.button("Mark essay as completed ✅"):
+            task.status = TaskStatus.COMPLETED
+            st.success("Essay task marked as completed.")
+
+
+# --------- Reading UI: create task ---------
+
+def create_reading_task_ui():
+    st.header("📚 Reading Assistant")
+
+    st.write("Paste multiple texts and read them interleaved, chunk by chunk.")
+
+    n = st.number_input(
+        "How many texts?",
+        min_value=1,
+        max_value=10,
+        value=2,
+        step=1,
+    )
+    texts: List[Dict[str, Any]] = []
+    for i in range(int(n)):
+        with st.expander(f"Text {i + 1}", expanded=(i == 0)):
+            title = st.text_input(
+                f"Title for text {i + 1}",
+                value=f"Text {i + 1}",
+                key=f"title_{i}",
+            )
+            content = st.text_area(
+                f"Content for text {i + 1}",
+                height=200,
+                key=f"text_{i}",
+            )
+            texts.append({
+                "id": f"text_{i + 1}",
+                "title": title,
+                "text": content,
+            })
+
+    seed = st.text_input("Seed (optional, for reproducible order)", value="")
+    shuffle_each = st.checkbox("Shuffle each round", value=True)
+
+    if st.button("Create Reading Task"):
+        manager: TaskManager = st.session_state.task_manager
+        seed_val = None
+        if seed:
+            seed_val = int(seed) if seed.isdigit() else seed
+
+        task = manager.create_task("reading", {
+            "texts": texts,
+            "seed": seed_val,
+            "shuffle_each_round": shuffle_each,
+        })
+
+        st.session_state.current_task_id = task.id
+        preview = manager.start_task(task.id)
+        st.success(f"Created reading task `{task.id}`")
+        st.write("Preview of next chunk:")
+        st.json(preview)
+
+
+def reading_controls():
+    manager: TaskManager = st.session_state.task_manager
+    task_id = st.session_state.current_task_id
+    task = manager.get_task(task_id)
+    assert isinstance(task, ReadingAssistantTask)
+
+    status = task.get_reading_status()
+    st.subheader("Reading Status")
+    st.json(status)
+
+    if status["remaining"] <= 0:
+        st.info("No more chunks. Task is completed.")
+        return
+
+    if st.button("Get next chunk ▶"):
+        out = manager.advance_task(task_id)
+        if out.get("completed"):
+            st.success("All chunks delivered.")
+        else:
+            c = out["chunk"]
+            st.markdown(
+                f"**Chunk {out['chunk_number']} / {out['total_chunks']}**  \n"
+                f"Source: **{c['source_title']}**  "
+                f"(paragraph {c['paragraph_index']} / {c['total_paragraphs_for_source']})"
+            )
+            st.write(c["text"])
+            st.caption(f"Remaining chunks: {out['remaining']}")
+
+
+# --------- Task list + main layout ---------
+
+def main():
+    st.set_page_config(
+        page_title="Essay & Reading Assistant",
+        layout="wide",
+    )
+    st.title("📝 Essay & 📚 Reading Assistant – Test UI")
+
+    manager: TaskManager = st.session_state.task_manager
+
+    col_task_list, col_main = st.columns([1, 3])
+
+    # Left: task list
+    with col_task_list:
+        st.subheader("Tasks")
+        tasks = manager.get_all_tasks()
+        if tasks:
+            for t in tasks:
+                label = f"{t['type']} – {t['id']} ({t['status']})"
+                if st.button(label, key=t["id"]):
+                    st.session_state.current_task_id = t["id"]
+        else:
+            st.info("No tasks yet.")
+
+        if st.session_state.current_task_id:
+            st.write(f"**Selected task:** `{st.session_state.current_task_id}`")
+            if st.button("Delete selected task 🗑"):
+                manager.delete_task(st.session_state.current_task_id)
+                st.session_state.current_task_id = None
+                st.success("Deleted task.")
+
+    # Right: main area
+    with col_main:
+        mode = st.radio(
+            "What do you want to do?",
+            ["Create Essay Task", "Create Reading Task", "Work on existing task"],
+        )
+
+        if mode == "Create Essay Task":
+            create_essay_task_ui()
+        elif mode == "Create Reading Task":
+            create_reading_task_ui()
+        else:
+            if not st.session_state.current_task_id:
+                st.info("Select a task on the left or create a new one.")
+            else:
+                task = manager.get_task(st.session_state.current_task_id)
+                if isinstance(task, EssayAssistantTask):
+                    essay_stage_controls()
+                elif isinstance(task, ReadingAssistantTask):
+                    reading_controls()
+                else:
+                    st.warning("Unknown task type.")
+
+
+if __name__ == "__main__":
+    main()
