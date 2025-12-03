@@ -24,11 +24,14 @@ if not logger.handlers:
 
 # ---------- Optional LLM integration ----------
 
-try:
-    # OpenAI-compatible client; if not installed, assistant still works in MVP mode
-    from openai import OpenAI  # type: ignore
-except Exception:
-    OpenAI = None  # type: ignore
+# try:
+#     # OpenAI-compatible client; if not installed, assistant still works in MVP mode
+#     from openai import OpenAI  # type: ignore
+# except Exception:
+#     OpenAI = None  # type: ignore
+OpenAI = None
+
+import google.generativeai as genai
 
 
 @dataclass
@@ -44,6 +47,7 @@ class LLMSettings:
     api_key: Optional[str] = None
     model: str = "gpt-4o-mini"
     base_url: Optional[str] = None  # for proxies / Azure / local OpenAI-compatible servers
+    provider: str = "gemini"  # or "openai"
 
 
 _llm_settings = LLMSettings()
@@ -54,12 +58,14 @@ def configure_llm(
     api_key: Optional[str] = None,
     model: str = "gpt-4o-mini",
     base_url: Optional[str] = None,
+    provider: str = "gemini",
 ) -> None:
     """Configure global LLM settings (called from UI layer)."""
     _llm_settings.enabled = enabled
     _llm_settings.api_key = api_key
     _llm_settings.model = model or "gpt-4o-mini"
     _llm_settings.base_url = base_url
+    _llm_settings.provider = provider
 
 
 def is_llm_configured() -> bool:
@@ -84,48 +90,65 @@ def call_llm(
         logger.info("LLM not configured or disabled; skipping call.")
         return None
 
-    if OpenAI is None:
-        logger.warning(
-            "openai package not available; install `openai` to use LLM features."
-        )
-        return None
+    if _llm_settings.provider == "gemini":
+        api_key = _llm_settings.api_key or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.warning("Gemini enabled but no API key provided.")
+            return None
+        genai.configure(api_key=api_key)
+        try:
+            model = genai.GenerativeModel(_llm_settings.model)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            logger.error("Gemini LLM call failed: %s", e)
+            raise
 
-    api_key = _llm_settings.api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        logger.warning("LLM enabled but no API key provided.")
-        return None
-
-    client_kwargs: Dict[str, Any] = {"api_key": api_key}
-    if _llm_settings.base_url:
-        client_kwargs["base_url"] = _llm_settings.base_url
-
-    client = OpenAI(**client_kwargs)  # type: ignore[arg-type]
-
-    messages: List[Dict[str, str]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    try:
-        completion = client.chat.completions.create(
-            model=_llm_settings.model,
-            messages=messages,
-            temperature=temperature,
-        )
-    except Exception as e:
-        logger.error("LLM call failed: %s", e)
-        raise
-
-    # Grab first message content, tolerating different client shapes
-    choice = completion.choices[0]
-    content = getattr(choice, "message", getattr(choice, "delta", None)).content  # type: ignore[attr-defined]
-    if isinstance(content, list):
-        text_parts = [
-            p.get("text", "") if isinstance(p, dict) else str(p)
-            for p in content
-        ]
-        return "".join(text_parts)
-    return str(content)
+    # --- OpenAI code commented out ---
+    # if OpenAI is None:
+    #     logger.warning(
+    #         "openai package not available; install `openai` to use LLM features."
+    #     )
+    #     return None
+    #
+    # api_key = _llm_settings.api_key or os.getenv("OPENAI_API_KEY")
+    # if not api_key:
+    #     logger.warning("LLM enabled but no API key provided.")
+    #     return None
+    #
+    # client_kwargs: Dict[str, Any] = {"api_key": api_key}
+    # if _llm_settings.base_url:
+    #     client_kwargs["base_url"] = _llm_settings.base_url
+    #
+    # client = OpenAI(**client_kwargs)  # type: ignore[arg-type]
+    #
+    # messages: List[Dict[str, str]] = []
+    # if system_prompt:
+    #     messages.append({"role": "system", "content": system_prompt})
+    # messages.append({"role": "user", "content": prompt})
+    #
+    # try:
+    #     completion = client.chat.completions.create(
+    #         model=_llm_settings.model,
+    #         messages=messages,
+    #         temperature=temperature,
+    #     )
+    # except Exception as e:
+    #     logger.error("LLM call failed: %s", e)
+    #     raise
+    #
+    # # Grab first message content, tolerating different client shapes
+    # choice = completion.choices[0]
+    # content = getattr(choice, "message", getattr(choice, "delta", None)).content  # type: ignore[attr-defined]
+    # if isinstance(content, list):
+    #     text_parts = [
+    #         p.get("text", "") if isinstance(p, dict) else str(p)
+    #         for p in content
+    #     ]
+    #     return "".join(text_parts)
+    # return str(content)
+    # --- end commented OpenAI code ---
+    return None
 
 def infer_essay_parameters_from_text(description: str) -> Dict[str, Any]:
     """
