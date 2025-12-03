@@ -7,6 +7,9 @@ from assistant_core import (
     EssayAssistantTask,
     ReadingAssistantTask,
     TaskStatus,
+    configure_llm,
+    is_llm_configured,
+    infer_essay_parameters_from_text
 )
 
 
@@ -18,6 +21,51 @@ if "task_manager" not in st.session_state:
 if "current_task_id" not in st.session_state:
     st.session_state.current_task_id = None
 
+# --------- LLM configuration (sidebar) ---------
+
+
+def setup_llm_from_sidebar() -> None:
+    """
+    Expose LLM configuration controls in the sidebar.
+
+    Values entered here are forwarded to `assistant_core.configure_llm`,
+    which `EssayAssistantTask` uses for model calls.
+    """
+    with st.sidebar:
+        st.subheader("🔌 LLM settings")
+        use_llm = st.checkbox(
+            "Enable AI features (LLM)",
+            value=False,
+            help="Turn this on to use an external LLM for thesis suggestions, etc.",
+        )
+        api_key = st.text_input(
+            "API key",
+            type="password",
+            help=(
+                "API key for your LLM provider (e.g., OpenAI). "
+                "If left blank, the environment variable OPENAI_API_KEY is used."
+            ),
+        )
+        model = st.text_input(
+            "Model name",
+            value="gpt-4o-mini",
+            help="Model identifier, e.g. 'gpt-4o-mini'.",
+        )
+        base_url = st.text_input(
+            "Base URL (optional)",
+            value="",
+            help=(
+                "For self-hosted / Azure / proxy endpoints that speak the "
+                "OpenAI-compatible Chat Completions API."
+            ),
+        )
+
+    configure_llm(
+        enabled=use_llm,
+        api_key=api_key.strip() or None,
+        model=model.strip() or "gpt-4o-mini",
+        base_url=base_url.strip() or None,
+    )
 
 # --------- Helper: render common stage UI lines ---------
 
@@ -51,6 +99,31 @@ def render_ui_lines(payload: Dict[str, Any]) -> None:
 def create_essay_task_ui():
     st.header("📄 Essay Assistant")
 
+    st.markdown("#### Option A: Paste assignment text (Advanced, uses LLM)")
+    assignment_text = st.text_area(
+        "Assignment description (optional)",
+        help=(
+            "Paste the full prompt here, e.g. "
+            '"Write a 1000-word opinion essay on Martin Eden, due next Friday."'
+        ),
+    )
+    if assignment_text and is_llm_configured():
+        if st.button("✨ Extract topic, type, word count, deadline"):
+            try:
+                parsed = infer_essay_parameters_from_text(assignment_text)
+                st.success("Extracted parameters (you can copy them into the form below):")
+                st.write(f"**Topic:** {parsed['topic'] or '—'}")
+                st.write(f"**Essay type:** {parsed['essay_type'] or '—'}")
+                st.write(f"**Word count:** {parsed['word_count'] or '—'}")
+                st.write(f"**Deadline (ISO):** {parsed['deadline'] or '—'}")
+                with st.expander("Raw LLM JSON", expanded=False):
+                    st.json(parsed["raw"])
+            except Exception as e:
+                st.error(f"Extraction failed: {e}")
+
+    st.markdown("---")
+    st.markdown("#### Option B: Enter parameters manually")
+    
     with st.form("essay_form"):
         topic = st.text_input(
             "Topic",
@@ -121,6 +194,22 @@ def essay_stage_controls():
             "Enter thesis (1–2 sentences)",
             value=task.essay_data.thesis or "",
         )
+
+        # Optional LLM support for SRSD Stage 1: Pick Ideas
+        if is_llm_configured():
+            if st.button("💡 Suggest thesis with AI"):
+                try:
+                    res = task.generate_thesis_suggestions()
+                    st.success(res.get("message", "Got suggestions from the model."))
+                    st.info(
+                        "Copy one of the options below into the box above, "
+                        "then click 'Set thesis'."
+                    )
+                    for i, cand in enumerate(res.get("candidates", []), start=1):
+                        st.markdown(f"**Option {i}:** {cand}")
+                except Exception as e:
+                    st.error(f"LLM error: {e}")
+
         col1, col2 = st.columns(2)
         if col1.button("Set thesis"):
             try:
@@ -330,6 +419,8 @@ def main():
         layout="wide",
     )
     st.title("📝 Essay & 📚 Reading Assistant – Test UI")
+    
+    setup_llm_from_sidebar()
 
     manager: TaskManager = st.session_state.task_manager
 

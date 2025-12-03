@@ -2,6 +2,7 @@
 
 import re
 import json
+import os  
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -21,6 +22,187 @@ if not logger.handlers:
     _handler.setFormatter(_formatter)
     logger.addHandler(_handler)
 
+# ---------- Optional LLM integration ----------
+
+try:
+    # OpenAI-compatible client; if not installed, assistant still works in MVP mode
+    from openai import OpenAI  # type: ignore
+except Exception:
+    OpenAI = None  # type: ignore
+
+
+@dataclass
+class LLMSettings:
+    """
+    Holds runtime configuration for an external LLM.
+
+    The UI (Streamlit) calls `configure_llm` to update these values.
+    If `enabled` is False or no API key is available, the assistant
+    behaves in MVP (non-LLM) mode.
+    """
+    enabled: bool = False
+    api_key: Optional[str] = None
+    model: str = "gpt-4o-mini"
+    base_url: Optional[str] = None  # for proxies / Azure / local OpenAI-compatible servers
+
+
+_llm_settings = LLMSettings()
+
+
+def configure_llm(
+    enabled: bool,
+    api_key: Optional[str] = None,
+    model: str = "gpt-4o-mini",
+    base_url: Optional[str] = None,
+) -> None:
+    """Configure global LLM settings (called from UI layer)."""
+    _llm_settings.enabled = enabled
+    _llm_settings.api_key = api_key
+    _llm_settings.model = model or "gpt-4o-mini"
+    _llm_settings.base_url = base_url
+
+
+def is_llm_configured() -> bool:
+    """Return True if LLM usage is enabled and an API key is present."""
+    api_key = _llm_settings.api_key or os.getenv("OPENAI_API_KEY")
+    return _llm_settings.enabled and bool(api_key)
+
+
+def call_llm(
+    prompt: str,
+    *,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.7,
+) -> Optional[str]:
+    """
+    Call the configured LLM and return its text response.
+
+    - If LLM is disabled, not installed, or misconfigured, returns None.
+    - On API errors, logs and re-raises so the UI can show an error.
+    """
+    if not is_llm_configured():
+        logger.info("LLM not configured or disabled; skipping call.")
+        return None
+
+    if OpenAI is None:
+        logger.warning(
+            "openai package not available; install `openai` to use LLM features."
+        )
+        return None
+
+    api_key = _llm_settings.api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.warning("LLM enabled but no API key provided.")
+        return None
+
+    client_kwargs: Dict[str, Any] = {"api_key": api_key}
+    if _llm_settings.base_url:
+        client_kwargs["base_url"] = _llm_settings.base_url
+
+    client = OpenAI(**client_kwargs)  # type: ignore[arg-type]
+
+    messages: List[Dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        completion = client.chat.completions.create(
+            model=_llm_settings.model,
+            messages=messages,
+            temperature=temperature,
+        )
+    except Exception as e:
+        logger.error("LLM call failed: %s", e)
+        raise
+
+    # Grab first message content, tolerating different client shapes
+    choice = completion.choices[0]
+    content = getattr(choice, "message", getattr(choice, "delta", None)).content  # type: ignore[attr-defined]
+    if isinstance(content, list):
+        text_parts = [
+            p.get("text", "") if isinstance(p, dict) else str(p)
+            for p in content
+        ]
+        return "".join(text_parts)
+    return str(content)
+
+def infer_essay_parameters_from_text(description: str) -> Dict[str, Any]:
+    """
+    Advanced (LLM) feature:
+    Given a natural-language assignment description, infer
+    topic, essay_type, word_count, and deadline (if possible).
+
+    Returns a dict with keys:
+    - topic: str | ""
+    - essay_type: str | ""
+    - word_count: int | 0
+    - deadline: str (ISO 8601 or "")  # UI decides what to do with it
+    - raw: original LLM JSON for debugging
+    """
+    if not is_llm_configured():
+        raise RuntimeError("LLM is not configured.")
+
+    prompt = f"""
+    You are helping set up an essay writing assignment.
+
+    The user will paste an instruction like:
+    "Write a 1000-word opinion essay on Martin Eden, due next Friday."
+
+    From the description below, extract:
+    - topic: short subject phrase (e.g. "Martin Eden")
+    - essay_type: one of ["opinion","analytical","comparative","interpretive"] if possible
+    - word_count: integer number of words (0 if not specified)
+    - deadline: ISO 8601 string in UTC if a clear date is given, otherwise "".
+
+    Description:
+    \"\"\"{description}\"\"\"
+
+    Reply ONLY with valid JSON of the form:
+    {{
+      "topic": "...",
+      "essay_type": "...",
+      "word_count": 1000,
+      "deadline": "2025-03-10T00:00:00Z"
+    }}
+    """
+
+    raw = call_llm(
+        prompt,
+        system_prompt=(
+            "You are a strict JSON API. Only output JSON, no commentary."
+        ),
+        temperature=0.2,
+    )
+
+    if not raw:
+        raise RuntimeError("No response from LLM while inferring essay parameters.")
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        raise RuntimeError(f"Failed to parse LLM JSON: {raw!r}")
+
+    topic = str(data.get("topic", "")).strip()
+    essay_type = str(data.get("essay_type", "")).strip().lower()
+    word_count = int(data.get("word_count", 0) or 0)
+    deadline = str(data.get("deadline", "")).strip()
+
+    # Normalize essay_type a bit
+    valid_types = {"opinion", "analytical", "comparative", "interpretive"}
+    if essay_type not in valid_types:
+        essay_type = ""
+
+    if word_count < 0:
+        word_count = 0
+
+    return {
+        "topic": topic,
+        "essay_type": essay_type,
+        "word_count": word_count,
+        "deadline": deadline,
+        "raw": data,
+    }
 
 # ========== BASE TASK SYSTEM ==========
 
@@ -94,6 +276,7 @@ class EssayData:
     word_count: int = 0
     deadline: Optional[datetime] = None
     thesis: str = ""
+    thesis_suggestions: List[str] = field(default_factory=list) 
     outline: Optional["Outline"] = None
     sections: List["EssaySection"] = field(default_factory=list)
     revision_passes: List["RevisionIssue"] = field(default_factory=list)
@@ -158,6 +341,7 @@ class RevisionIssue:
     location: str
     severity: str = "medium"  # high, medium, low
     resolved: bool = False
+    suggestion: Optional[str] = None
 
 
 # ========== ESSAY STAGES ==========
@@ -384,15 +568,20 @@ class WriteStage(EssayStage):
         logger.info("Creating writing sections from outline")
 
         # Initialize sections from outline
-        essay_data.sections = [
-            EssaySection(
-                title=outline_section.title,
-                target_words=outline_section.word_count,
-                guiding_question=outline_section.guiding_question,
-                tree_prompts=self._generate_tree_prompts(outline_section.title),
-            )
-            for outline_section in essay_data.outline.sections
-        ]
+        if not self.validate(essay_data):
+            raise ValueError("Outline must be prepared before writing.")
+        if not essay_data.sections:
+            essay_data.sections = [
+                EssaySection(
+                    title=outline_section.title,
+                    target_words=outline_section.word_count,
+                    guiding_question=outline_section.guiding_question,
+                    tree_prompts=self._generate_tree_prompts(outline_section.title),
+                )
+                for outline_section in essay_data.outline.sections
+            ]
+        
+        self._maybe_enrich_sections_with_llm(essay_data)
 
         ui_lines = [
             "=== STAGE 3: WRITE (DRAFT) ===",
@@ -702,6 +891,98 @@ class StructurePass(RevisionPass):
 
     def _is_question(self, sentence: str) -> bool:
         return "?" in sentence
+    
+    def _maybe_enrich_sections_with_llm(self, essay_data: EssayData) -> None:
+        """
+        Advanced (LLM): contextualize guiding questions & TREE prompts.
+
+        For each section (esp. body paragraphs), ask the LLM for:
+        - a focused guiding question
+        - an example topic sentence
+        - 2–3 possible reasons
+        - a hint for evidence/explanation
+
+        Results are stored into `section.guiding_question` and `section.tree_prompts`.
+        """
+        if not is_llm_configured():
+            return
+        if not essay_data.thesis:
+            return
+
+        thesis = essay_data.thesis
+
+        for section in essay_data.sections:
+            # Skip if we already have good content
+            if section.content.strip():
+                continue
+
+            title = section.title
+            is_body = not any(
+                k in title.lower() for k in ("introduction", "conclusion")
+            )
+
+            try:
+                prompt = f"""
+                You are a writing tutor using SRSD (POW + TREE).
+                The student's thesis is:
+
+                "{thesis}"
+
+                We are planning a section titled "{title}".
+
+                For this single section, produce JSON of the form:
+                {{
+                  "guiding_question": "...",
+                  "topic_sentence_example": "...",
+                  "reasons": ["...", "..."],
+                  "evidence_hint": "..."
+                }}
+
+                - Make the guiding question concrete and answerable in one paragraph.
+                - The topic sentence should clearly support the thesis.
+                - Reasons should be distinct and relevant.
+                - evidence_hint should suggest what kind of example / quotation / detail
+                  the student could use.
+                """
+
+                raw = call_llm(
+                    prompt,
+                    system_prompt=(
+                        "You are a strict JSON generator. Output only the JSON object "
+                        "described, no commentary."
+                    ),
+                    temperature=0.6 if is_body else 0.4,
+                )
+
+                if not raw:
+                    continue
+
+                data = json.loads(raw)
+                gq = str(data.get("guiding_question", "")).strip()
+                ts = str(data.get("topic_sentence_example", "")).strip()
+                reasons = data.get("reasons", [])
+                if not isinstance(reasons, list):
+                    reasons = []
+                reasons = [str(r).strip() for r in reasons if str(r).strip()]
+                ev = str(data.get("evidence_hint", "")).strip()
+
+                if gq:
+                    section.guiding_question = gq
+                # TREE: Topic / Reasons / Evidence / Ending hint
+                prompts = section.tree_prompts or {}
+                if ts:
+                    prompts["T"] = ts
+                if reasons:
+                    prompts["R"] = "; ".join(reasons)
+                if ev:
+                    prompts["E"] = ev
+                if "E2" not in prompts:
+                    prompts["E2"] = "Link this paragraph back to the thesis."
+
+                section.tree_prompts = prompts
+
+            except Exception as e:
+                logger.warning("LLM error while enriching section '%s': %s", title, e)
 
 
 class ArgumentEvidencePass(RevisionPass):
@@ -798,12 +1079,35 @@ class FlowCohesionPass(RevisionPass):
             for j, sentence in enumerate(sentences):
                 word_count = len(sentence.split())
                 if word_count > 35:
+                    suggestion = None
+                    if is_llm_configured():
+                        try:
+                            s_prompt = f"""
+                            Rewrite the following sentence into 2 shorter sentences.
+                            Preserve meaning, but improve clarity and flow:
+
+                            "{sentence}"
+                            """
+                            s_raw = call_llm(
+                                s_prompt,
+                                system_prompt=(
+                                    "You are an editor. Return only the rewritten sentence(s), "
+                                    "no explanation."
+                                ),
+                                temperature=0.3,
+                            )
+                            if s_raw:
+                                suggestion = s_raw.strip()
+                        except Exception as e:
+                            logger.warning("LLM failed to simplify sentence: %s", e)
+
                     issues.append(
                         RevisionIssue(
-                            "flow",
-                            f"Long sentence ({word_count} words) - consider splitting",
-                            f"{section.title}, sentence {j + 1}",
-                            "low",
+                            "sentence_length",
+                            f"Sentence is quite long ({word_count} words); consider splitting it.",
+                            f"{section.title} (sentence {j + 1})",
+                            "medium",
+                            suggestion=suggestion,
                         )
                     )
 
@@ -893,7 +1197,43 @@ class StyleClarityPass(RevisionPass):
                         )
                     )
                     break
+                # Optional global style suggestion per section (LLM)
+        if is_llm_configured() and section.content.strip():
+            try:
+                style_prompt = f"""
+                You are editing an essay paragraph.
 
+                Text:
+                \"\"\"{section.content}\"\"\"
+
+                Rewrite this text:
+                - Preserve all important ideas and meaning
+                - Reduce length by about 15–20%
+                - Use clear, simple academic English
+                - Do NOT change first person/third person perspective
+
+                Return only the rewritten paragraph.
+                """
+
+                alt = call_llm(
+                    style_prompt,
+                    system_prompt=(
+                        "You are a concise editor. Only output the rewritten paragraph."
+                    ),
+                    temperature=0.3,
+                )
+                if alt:
+                    issues.append(
+                        RevisionIssue(
+                            "style_rewrite",
+                            "Optional: shorter, clearer version of this section.",
+                            section.title,
+                            "low",
+                            suggestion=alt.strip(),
+                        )
+                    )
+            except Exception as e:
+                logger.warning("LLM style rewrite failed: %s", e)
         return issues
 
 
@@ -1262,6 +1602,167 @@ class EssayAssistantTask(Task):
             for section in self.essay_data.sections
             if section.content.strip()
         )
+    
+    def generate_thesis_suggestions(self, n: int = 4) -> Dict[str, Any]:
+        """
+        SRSD Stage 1: Pick Ideas (Advanced / LLM).
+        Given Topic + Essay Type, ask the LLM for several candidate theses.
+        """
+        if not is_llm_configured():
+            raise RuntimeError("LLM is not configured.")
+
+        topic = self.essay_data.topic or "(no topic provided)"
+        essay_type = self.essay_data.essay_type or "(unspecified)"
+        words = self.essay_data.word_count or 1000
+
+        prompt = (
+            "You are a writing tutor using the SRSD model (POW + TREE). "
+            "Generate {n} distinct thesis statements for the essay described below. "
+            "Each thesis must be:\n"
+            "- Debatable (not a mere fact)\n"
+            "- Relevant to the topic\n"
+            "- Scalable to around {words} words\n"
+            "- 1–2 sentences long\n\n"
+            f"Topic: {topic}\n"
+            f"Essay type: {essay_type}\n\n"
+            "Return ONLY JSON:\n"
+            '{ "theses": ["...", "..."] }\n'
+        ).format(n=n, words=words)
+
+        raw = call_llm(
+            prompt,
+            system_prompt=(
+                "You are a strict JSON API. Reply ONLY with JSON of the form "
+                '{"theses": ["...", "..."]}. No explanations.'
+            ),
+            temperature=0.7,
+        )
+
+        if not raw:
+            raise RuntimeError("No response from LLM while generating theses.")
+
+        candidates: List[str] = []
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for item in data.get("theses", []):
+                    if isinstance(item, str):
+                        text = item.strip()
+                        if text:
+                            candidates.append(text)
+        except Exception:
+            # Fallback: try to parse line-by-line
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                line = re.sub(r"^[\-\*\d\.)]+\s*", "", line)
+                if line:
+                    candidates.append(line)
+
+        candidates = [c for c in candidates if c]
+        if not candidates:
+            raise RuntimeError("LLM did not return usable thesis candidates.")
+
+        if len(candidates) > n:
+            candidates = candidates[:n]
+
+        self.essay_data.thesis_suggestions = candidates
+
+        ui_lines = ["🤖 Suggested thesis statements:", ""]
+        for i, cand in enumerate(candidates, start=1):
+            ui_lines.append(f"{i}. {cand}")
+
+        return {
+            "ready": True,
+            "message": f"Generated {len(candidates)} thesis candidate(s).",
+            "candidates": candidates,
+            "ui_lines": ui_lines,
+        }
+    
+    def generate_thesis_suggestions(self, n: int = 4) -> Dict[str, Any]:
+        """
+        Advanced (LLM) behaviour for SRSD Stage 1: using Topic + Essay Type,
+        generate several candidate thesis statements.
+
+        Returns:
+            {
+                "ready": True,
+                "message": "...",
+                "candidates": [...],
+                "ui_lines": [...]
+            }
+        """
+        if not is_llm_configured():
+            raise RuntimeError(
+                "LLM is not configured. Enable it in the UI and provide an API key."
+            )
+
+        topic = self.essay_data.topic or "(no topic provided)"
+        essay_type = self.essay_data.essay_type or "(unspecified)"
+
+        prompt = (
+            "You are a writing tutor using the Self-Regulated Strategy Development "
+            "(SRSD) model with the POW + TREE mnemonics. "
+            "Given the assignment below, generate {n} distinct, debatable thesis "
+            "statements. Each thesis must be 1–2 sentences, clearly arguable, "
+            "and broad enough to support a {words}-word essay.\n\n"
+            f"Topic: {topic}\n"
+            f"Essay type: {essay_type}\n"
+            "Return your answer strictly as JSON with a single key 'theses' that "
+            "maps to a list of strings."
+        ).format(n=n, words=self.essay_data.word_count or 1000)
+
+        raw = call_llm(
+            prompt,
+            system_prompt=(
+                "You are a careful JSON-only API. Always reply with valid JSON of "
+                'the form {"theses": ["...", "..."]} and nothing else.'
+            ),
+            temperature=0.7,
+        )
+
+        if not raw:
+            raise RuntimeError("LLM did not return any content.")
+
+        candidates: List[str] = []
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for item in data.get("theses", []):
+                    if isinstance(item, str):
+                        text = item.strip()
+                        if text:
+                            candidates.append(text)
+        except Exception:
+            # Fallback: parse non-JSON replies line-by-line
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                line = re.sub(r"^[\-\*\d\.)]+\s*", "", line)  # strip bullets / numbering
+                if line:
+                    candidates.append(line)
+
+        candidates = [c for c in candidates if c]
+        if not candidates:
+            raise RuntimeError("LLM did not return any thesis candidates.")
+
+        if len(candidates) > n:
+            candidates = candidates[:n]
+
+        self.essay_data.thesis_suggestions = candidates
+
+        ui_lines = ["🤖 Suggested thesis statements:", ""]
+        for i, cand in enumerate(candidates, start=1):
+            ui_lines.append(f"{i}. {cand}")
+
+        return {
+            "ready": True,
+            "message": f"Generated {len(candidates)} thesis candidate(s).",
+            "candidates": candidates,
+            "ui_lines": ui_lines,
+        }
 
 
 # ========== READING ASSISTANT TASK ==========
