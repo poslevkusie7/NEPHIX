@@ -517,7 +517,8 @@ class OrganizeStage(EssayStage):
             "ready": True,
             "message": "Outline generated successfully",
             "stage": {"name": self.name, "number": self.stage_number},
-            "data": outline,
+            "outline": outline,
+            "sections": outline.sections,
             "ui_lines": ui_lines,
         }
 
@@ -591,7 +592,10 @@ class WriteStage(EssayStage):
         logger.info("Creating writing sections from outline")
 
         # Initialize sections from outline
-        if not self.validate(essay_data):
+        # Prerequisite for entering Write: an outline must exist.
+        # NOTE: `validate()` for Write is about *completion* (all sections drafted),
+        # so we must not use it as a prerequisite gate here.
+        if essay_data.outline is None or not essay_data.outline.sections:
             raise ValueError("Outline must be prepared before writing.")
         if not essay_data.sections:
             essay_data.sections = [
@@ -655,6 +659,86 @@ class WriteStage(EssayStage):
                 "E1": "Explain/Analyze - How does evidence prove your point?",
                 "E2": "End/Transition - Connect to next paragraph",
             }
+
+    def _maybe_enrich_sections_with_llm(self, essay_data: EssayData) -> None:
+        """Advanced (LLM): enrich guiding questions + TREE prompts per section."""
+        if not is_llm_configured():
+            return
+        if not essay_data.thesis:
+            return
+        if not essay_data.sections:
+            return
+
+        thesis = essay_data.thesis
+
+        for section in essay_data.sections:
+            # Skip if we already have content
+            if section.content.strip():
+                continue
+
+            title = section.title
+            is_body = not any(k in title.lower() for k in ("introduction", "conclusion"))
+
+            try:
+                prompt = f"""
+                You are a writing tutor using SRSD (POW + TREE).
+                The student's thesis is:
+
+                \"{thesis}\"
+
+                We are planning a section titled \"{title}\".
+
+                For this single section, produce JSON of the form:
+                {{
+                  \"guiding_question\": \"...\",
+                  \"topic_sentence_example\": \"...\",
+                  \"reasons\": [\"...\", \"...\"],
+                  \"evidence_hint\": \"...\"
+                }}
+
+                - Make the guiding question concrete and answerable in one paragraph.
+                - The topic sentence should clearly support the thesis.
+                - Reasons should be distinct and relevant.
+                - evidence_hint should suggest what kind of example / quotation / detail the student could use.
+                """
+
+                raw = call_llm(
+                    prompt,
+                    system_prompt=(
+                        "You are a strict JSON generator. Output only the JSON object described, no commentary."
+                    ),
+                    temperature=0.6 if is_body else 0.4,
+                )
+
+                if not raw:
+                    continue
+
+                data = json.loads(raw)
+                gq = str(data.get("guiding_question", "")).strip()
+                ts = str(data.get("topic_sentence_example", "")).strip()
+                reasons = data.get("reasons", [])
+                if not isinstance(reasons, list):
+                    reasons = []
+                reasons = [str(r).strip() for r in reasons if str(r).strip()]
+                ev = str(data.get("evidence_hint", "")).strip()
+
+                if gq:
+                    section.guiding_question = gq
+
+                prompts = section.tree_prompts or {}
+                if ts:
+                    prompts["T"] = ts
+                if reasons:
+                    prompts["R"] = "; ".join(reasons)
+                if ev:
+                    prompts["E1"] = ev
+                if "E2" not in prompts:
+                    prompts["E2"] = "Link this paragraph back to the thesis."
+
+                section.tree_prompts = prompts
+
+            except Exception as e:
+                logger.warning("LLM error while enriching section '%s': %s", title, e)
 
     def add_content(
         self, essay_data: EssayData, section_index: int, content: str
@@ -915,97 +999,6 @@ class StructurePass(RevisionPass):
     def _is_question(self, sentence: str) -> bool:
         return "?" in sentence
     
-    def _maybe_enrich_sections_with_llm(self, essay_data: EssayData) -> None:
-        """
-        Advanced (LLM): contextualize guiding questions & TREE prompts.
-
-        For each section (esp. body paragraphs), ask the LLM for:
-        - a focused guiding question
-        - an example topic sentence
-        - 2–3 possible reasons
-        - a hint for evidence/explanation
-
-        Results are stored into `section.guiding_question` and `section.tree_prompts`.
-        """
-        if not is_llm_configured():
-            return
-        if not essay_data.thesis:
-            return
-
-        thesis = essay_data.thesis
-
-        for section in essay_data.sections:
-            # Skip if we already have good content
-            if section.content.strip():
-                continue
-
-            title = section.title
-            is_body = not any(
-                k in title.lower() for k in ("introduction", "conclusion")
-            )
-
-            try:
-                prompt = f"""
-                You are a writing tutor using SRSD (POW + TREE).
-                The student's thesis is:
-
-                "{thesis}"
-
-                We are planning a section titled "{title}".
-
-                For this single section, produce JSON of the form:
-                {{
-                  "guiding_question": "...",
-                  "topic_sentence_example": "...",
-                  "reasons": ["...", "..."],
-                  "evidence_hint": "..."
-                }}
-
-                - Make the guiding question concrete and answerable in one paragraph.
-                - The topic sentence should clearly support the thesis.
-                - Reasons should be distinct and relevant.
-                - evidence_hint should suggest what kind of example / quotation / detail
-                  the student could use.
-                """
-
-                raw = call_llm(
-                    prompt,
-                    system_prompt=(
-                        "You are a strict JSON generator. Output only the JSON object "
-                        "described, no commentary."
-                    ),
-                    temperature=0.6 if is_body else 0.4,
-                )
-
-                if not raw:
-                    continue
-
-                data = json.loads(raw)
-                gq = str(data.get("guiding_question", "")).strip()
-                ts = str(data.get("topic_sentence_example", "")).strip()
-                reasons = data.get("reasons", [])
-                if not isinstance(reasons, list):
-                    reasons = []
-                reasons = [str(r).strip() for r in reasons if str(r).strip()]
-                ev = str(data.get("evidence_hint", "")).strip()
-
-                if gq:
-                    section.guiding_question = gq
-                # TREE: Topic / Reasons / Evidence / Ending hint
-                prompts = section.tree_prompts or {}
-                if ts:
-                    prompts["T"] = ts
-                if reasons:
-                    prompts["R"] = "; ".join(reasons)
-                if ev:
-                    prompts["E"] = ev
-                if "E2" not in prompts:
-                    prompts["E2"] = "Link this paragraph back to the thesis."
-
-                section.tree_prompts = prompts
-
-            except Exception as e:
-                logger.warning("LLM error while enriching section '%s': %s", title, e)
 
 
 class ArgumentEvidencePass(RevisionPass):
@@ -1221,42 +1214,42 @@ class StyleClarityPass(RevisionPass):
                     )
                     break
                 # Optional global style suggestion per section (LLM)
-        if is_llm_configured() and section.content.strip():
-            try:
-                style_prompt = f"""
-                You are editing an essay paragraph.
+                if is_llm_configured() and section.content.strip():
+                    try:
+                        style_prompt = f"""
+                        You are editing an essay paragraph.
 
-                Text:
-                \"\"\"{section.content}\"\"\"
+                        Text:
+                        \"\"\"{section.content}\"\"\"
 
-                Rewrite this text:
-                - Preserve all important ideas and meaning
-                - Reduce length by about 15–20%
-                - Use clear, simple academic English
-                - Do NOT change first person/third person perspective
+                        Rewrite this text:
+                        - Preserve all important ideas and meaning
+                        - Reduce length by about 15–20%
+                        - Use clear, simple academic English
+                        - Do NOT change first person/third person perspective
 
-                Return only the rewritten paragraph.
-                """
+                        Return only the rewritten paragraph.
+                        """
 
-                alt = call_llm(
-                    style_prompt,
-                    system_prompt=(
-                        "You are a concise editor. Only output the rewritten paragraph."
-                    ),
-                    temperature=0.3,
-                )
-                if alt:
-                    issues.append(
-                        RevisionIssue(
-                            "style_rewrite",
-                            "Optional: shorter, clearer version of this section.",
-                            section.title,
-                            "low",
-                            suggestion=alt.strip(),
+                        alt = call_llm(
+                            style_prompt,
+                            system_prompt=(
+                                "You are a concise editor. Only output the rewritten paragraph."
+                            ),
+                            temperature=0.3,
                         )
-                    )
-            except Exception as e:
-                logger.warning("LLM style rewrite failed: %s", e)
+                        if alt:
+                            issues.append(
+                                RevisionIssue(
+                                    "style_rewrite",
+                                    "Optional: shorter, clearer version of this section.",
+                                    section.title,
+                                    "low",
+                                    suggestion=alt.strip(),
+                                )
+                            )
+                    except Exception as e:
+                        logger.warning("LLM style rewrite failed: %s", e)
         return issues
 
 
@@ -1551,14 +1544,35 @@ class EssayAssistantTask(Task):
         """Advance to the next stage"""
         current_stage = self.stages[self.current_stage]
 
+        # Some stages (e.g., Organize/Write initialization) can be safely executed
+        # to populate required data structures before validation.
         if not current_stage.validate(self.essay_data):
-            logger.warning(
-                "Cannot advance from stage '%s': validation failed",
-                current_stage.name,
-            )
-            raise ValueError(
-                f"Cannot advance: Stage {current_stage.name} not completed properly"
-            )
+            # Allow Organize to run if the UI tries to advance without having executed it.
+            if isinstance(current_stage, OrganizeStage):
+                logger.info(
+                    "Auto-executing Organize stage during next_stage() to generate outline."
+                )
+                current_stage.execute(self.essay_data)
+
+            # Allow Write to initialize sections if the UI advanced too early.
+            elif isinstance(current_stage, WriteStage):
+                # Only run initialization if sections are missing; do NOT attempt to
+                # bypass the requirement that the user writes content.
+                if not self.essay_data.sections:
+                    logger.info(
+                        "Auto-executing Write stage during next_stage() to initialize sections."
+                    )
+                    current_stage.execute(self.essay_data)
+
+            # Re-check validation after any safe auto-execution
+            if not current_stage.validate(self.essay_data):
+                logger.warning(
+                    "Cannot advance from stage '%s': validation failed",
+                    current_stage.name,
+                )
+                raise ValueError(
+                    f"Cannot advance: Stage {current_stage.name} not completed properly"
+                )
 
         self.current_stage += 1
 

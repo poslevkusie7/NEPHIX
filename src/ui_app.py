@@ -216,6 +216,7 @@ def essay_stage_controls():
                 res = task.set_thesis(thesis)
                 st.success(res["message"])
                 render_ui_lines(res)
+                st.rerun()
             except Exception as e:
                 st.error(str(e))
         if col2.button("Next stage ▶"):
@@ -225,19 +226,35 @@ def essay_stage_controls():
                 render_ui_lines(res)
                 with st.expander("Raw response (debug)", expanded=False):
                     st.json(res)
+                st.rerun()
             except Exception as e:
                 st.error(str(e))
 
     # Stage 2: Organize
     elif current_stage == 2:
         st.write("Outline will be generated from topic + word count.")
+
+        # Display current outline if already generated
+        if task.essay_data.outline and getattr(task.essay_data.outline, "sections", None):
+            with st.expander("Current outline", expanded=True):
+                for i, s in enumerate(task.essay_data.outline.sections, start=1):
+                    st.markdown(
+                        f"**{i}. {s.title}** — {getattr(s, 'word_count', '—')} words"  # type: ignore
+                    )
+                    gq = getattr(s, "guiding_question", "")
+                    if gq:
+                        st.caption(gq)
+
         if st.button("Generate outline & go to Write stage ▶"):
             try:
+                # With the updated assistant_core, this will auto-execute Organize if needed,
+                # then advance to Write.
                 res2 = manager.advance_task(task_id)  # 2 -> 3
-                st.success("Outline generated. Moved to Write stage.")
+                st.success("Outline ready. Moved to Write stage.")
                 render_ui_lines(res2)
                 with st.expander("Raw response (debug)", expanded=False):
                     st.json(res2)
+                st.rerun()
             except Exception as e:
                 st.error(str(e))
 
@@ -247,7 +264,17 @@ def essay_stage_controls():
 
         sections = task.essay_data.sections
         if not sections:
-            st.info("No sections initialized yet. Try advancing to this stage again.")
+            st.info("No sections initialized yet.")
+            if st.button("Initialize writing sections ▶"):
+                try:
+                    res_init = task.stages[2].execute(task.essay_data)  # WriteStage
+                    st.success("Writing sections initialized.")
+                    render_ui_lines(res_init)
+                    with st.expander("Raw response (debug)", expanded=False):
+                        st.json(res_init)
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
             return
 
         for idx, sec in enumerate(sections):
@@ -276,6 +303,7 @@ def essay_stage_controls():
                             f"Saved. Section completed: {res['completed']}. "
                             f"All sections done: {res['total_completed']}"
                         )
+                        st.rerun()
                     except Exception as e:
                         st.error(str(e))
 
@@ -286,6 +314,7 @@ def essay_stage_controls():
                 render_ui_lines(res)
                 with st.expander("Raw response (debug)", expanded=False):
                     st.json(res)
+                st.rerun()
             except Exception as e:
                 st.error(str(e))
 
