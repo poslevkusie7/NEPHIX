@@ -1,17 +1,13 @@
-#!/usr/bin/env python3
-
 import re
 import json
 import os  
+import uuid
+import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
-
-import uuid
-import random
-import logging
 
 # ---------- Logging setup ----------
 logger = logging.getLogger("assistant_core")
@@ -22,57 +18,45 @@ if not logger.handlers:
     _handler.setFormatter(_formatter)
     logger.addHandler(_handler)
 
-# ---------- Optional LLM integration ----------
+# ---------- xAI Integration (via OpenAI SDK) ----------
 
-# try:
-#     # OpenAI-compatible client; if not installed, assistant still works in MVP mode
-#     from openai import OpenAI  # type: ignore
-# except Exception:
-#     OpenAI = None  # type: ignore
-OpenAI = None
-
-import google.generativeai as genai
-
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 @dataclass
 class LLMSettings:
-    """
-    Holds runtime configuration for an external LLM.
-
-    The UI (Streamlit) calls `configure_llm` to update these values.
-    If `enabled` is False or no API key is available, the assistant
-    behaves in MVP (non-LLM) mode.
-    """
     enabled: bool = False
     api_key: Optional[str] = None
-    model: str = "gpt-4o-mini"
-    base_url: Optional[str] = None  # for proxies / Azure / local OpenAI-compatible servers
-    provider: str = "gemini"  # or "openai"
-
+    model: str = "grok-beta"
+    base_url: str = "https://api.x.ai/v1"
 
 _llm_settings = LLMSettings()
-
 
 def configure_llm(
     enabled: bool,
     api_key: Optional[str] = None,
-    model: str = "gpt-4o-mini",
-    base_url: Optional[str] = None,
-    provider: str = "gemini",
+    model: str = "grok-beta",
 ) -> None:
-    """Configure global LLM settings (called from UI layer)."""
+    """
+    Configure xAI settings. 
+    """
     _llm_settings.enabled = enabled
     _llm_settings.api_key = api_key
-    _llm_settings.model = model or "gpt-4o-mini"
-    _llm_settings.base_url = base_url
-    _llm_settings.provider = provider
-
+    _llm_settings.model = model or "grok-beta"
+    # Hardcoded to xAI
+    _llm_settings.base_url = "https://api.x.ai/v1"
 
 def is_llm_configured() -> bool:
-    """Return True if LLM usage is enabled and an API key is present."""
-    api_key = _llm_settings.api_key or os.getenv("OPENAI_API_KEY")
-    return _llm_settings.enabled and bool(api_key)
-
+    if not _llm_settings.enabled:
+        return False
+    if _llm_settings.api_key:
+        return True
+    # Check only xAI env var
+    if os.getenv("XAI_API_KEY"):
+        return True
+    return False
 
 def call_llm(
     prompt: str,
@@ -81,271 +65,104 @@ def call_llm(
     temperature: float = 0.7,
 ) -> Optional[str]:
     """
-    Call the configured LLM and return its text response.
-
-    - If LLM is disabled, not installed, or misconfigured, returns None.
-    - On API errors, logs and re-raises so the UI can show an error.
+    Call xAI API.
     """
+    if OpenAI is None:
+        raise ImportError("The 'openai' library is missing. Run: pip install openai")
+
     if not is_llm_configured():
-        logger.info("LLM not configured or disabled; skipping call.")
-        return None
+        raise ValueError("xAI is not configured. Check settings.")
 
-    if _llm_settings.provider == "gemini":
-        api_key = _llm_settings.api_key or os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("Gemini enabled but no API key provided.")
-            return None
-        genai.configure(api_key=api_key)
-        try:
-            model = genai.GenerativeModel(_llm_settings.model)
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            logger.error("Gemini LLM call failed: %s", e)
-            raise
+    # Resolve Credentials
+    api_key = _llm_settings.api_key or os.getenv("XAI_API_KEY")
+    
+    if not api_key:
+        raise ValueError("No xAI API key found. Please enter it in the sidebar.")
 
-    # --- OpenAI code commented out ---
-    # if OpenAI is None:
-    #     logger.warning(
-    #         "openai package not available; install `openai` to use LLM features."
-    #     )
-    #     return None
-    #
-    # api_key = _llm_settings.api_key or os.getenv("OPENAI_API_KEY")
-    # if not api_key:
-    #     logger.warning("LLM enabled but no API key provided.")
-    #     return None
-    #
-    # client_kwargs: Dict[str, Any] = {"api_key": api_key}
-    # if _llm_settings.base_url:
-    #     client_kwargs["base_url"] = _llm_settings.base_url
-    #
-    # client = OpenAI(**client_kwargs)  # type: ignore[arg-type]
-    #
-    # messages: List[Dict[str, str]] = []
-    # if system_prompt:
-    #     messages.append({"role": "system", "content": system_prompt})
-    # messages.append({"role": "user", "content": prompt})
-    #
-    # try:
-    #     completion = client.chat.completions.create(
-    #         model=_llm_settings.model,
-    #         messages=messages,
-    #         temperature=temperature,
-    #     )
-    # except Exception as e:
-    #     logger.error("LLM call failed: %s", e)
-    #     raise
-    #
-    # # Grab first message content, tolerating different client shapes
-    # choice = completion.choices[0]
-    # content = getattr(choice, "message", getattr(choice, "delta", None)).content  # type: ignore[attr-defined]
-    # if isinstance(content, list):
-    #     text_parts = [
-    #         p.get("text", "") if isinstance(p, dict) else str(p)
-    #         for p in content
-    #     ]
-    #     return "".join(text_parts)
-    # return str(content)
-    # --- end commented OpenAI code ---
-    return None
+    try:
+        client = OpenAI(
+            api_key=api_key,
+            base_url=_llm_settings.base_url
+        )
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        completion = client.chat.completions.create(
+            model=_llm_settings.model,
+            messages=messages,
+            temperature=temperature,
+        )
+        
+        return completion.choices[0].message.content
+
+    except Exception as e:
+        logger.error(f"xAI Call Failed: {e}")
+        raise e
 
 def infer_essay_parameters_from_text(description: str) -> Dict[str, Any]:
     """
-    Advanced (LLM) feature:
-    Given a natural-language assignment description, infer
-    topic, essay_type, word_count, and deadline (if possible).
-
-    Returns a dict with keys:
-    - topic: str | ""
-    - essay_type: str | ""
-    - word_count: int | 0
-    - deadline: str (ISO 8601 or "")  # UI decides what to do with it
-    - raw: original LLM JSON for debugging
+    Uses xAI to extract parameters.
     """
     if not is_llm_configured():
-        raise RuntimeError("LLM is not configured.")
+        raise RuntimeError("xAI is not configured.")
 
     prompt = f"""
-    You are helping set up an essay writing assignment.
-
-    The user will paste an instruction like:
-    "Write a 1000-word opinion essay on Martin Eden, due next Friday."
-
-    From the description below, extract:
-    - topic: short subject phrase (e.g. "Martin Eden")
-    - essay_type: one of ["opinion","analytical","comparative","interpretive"] if possible
-    - word_count: integer number of words (0 if not specified)
-    - deadline: ISO 8601 string in UTC if a clear date is given, otherwise "".
-
-    Description:
-    \"\"\"{description}\"\"\"
-
-    Reply ONLY with valid JSON of the form:
+    Extract essay parameters from this description: "{description}"
+    Return JSON only:
     {{
       "topic": "...",
-      "essay_type": "...",
+      "essay_type": "one of [opinion, analytical, comparative, interpretive]",
       "word_count": 1000,
-      "deadline": "2025-03-10T00:00:00Z"
+      "deadline": "YYYY-MM-DD"
     }}
     """
-
-    raw = call_llm(
-        prompt,
-        system_prompt=(
-            "You are a strict JSON API. Only output JSON, no commentary."
-        ),
-        temperature=0.2,
-    )
-
-    if not raw:
-        raise RuntimeError("No response from LLM while inferring essay parameters.")
-
+    # Using specific error handling for the auto-fill feature
     try:
-        data = json.loads(raw)
-    except Exception:
-        raise RuntimeError(f"Failed to parse LLM JSON: {raw!r}")
+        raw = call_llm(prompt, temperature=0.2)
+        if raw.startswith("```"):
+            raw = raw.strip().strip("`").replace("json", "")
+        return json.loads(raw)
+    except Exception as e:
+        logger.error(f"Auto-fill failed: {e}")
+        # Raise it so the UI shows the error instead of silently failing
+        raise e
 
-    topic = str(data.get("topic", "")).strip()
-    essay_type = str(data.get("essay_type", "")).strip().lower()
-    word_count = int(data.get("word_count", 0) or 0)
-    deadline = str(data.get("deadline", "")).strip()
-
-    # Normalize essay_type a bit
-    valid_types = {"opinion", "analytical", "comparative", "interpretive"}
-    if essay_type not in valid_types:
-        essay_type = ""
-
-    if word_count < 0:
-        word_count = 0
-
-    return {
-        "topic": topic,
-        "essay_type": essay_type,
-        "word_count": word_count,
-        "deadline": deadline,
-        "raw": data,
-    }
-
-# ========== BASE TASK SYSTEM ==========
+# ========== BASE TASK SYSTEM (Unchanged) ==========
 
 class TaskStatus(Enum):
     INITIALIZED = "initialized"
     ACTIVE = "active"
     COMPLETED = "completed"
-    FAILED = "failed"
-
 
 class Task(ABC):
-    """Abstract base class for all task types"""
-
     def __init__(self, params: Dict[str, Any]):
-        self.id = self._generate_id()
+        self.id = f"task_{uuid.uuid4().hex[:9]}"
         self.type = self.__class__.__name__
         self.created_at = datetime.now()
         self.status = TaskStatus.INITIALIZED
-        self.current_stage = 0
         self.params = params or {}
 
-    def _generate_id(self) -> str:
-        return f"task_{uuid.uuid4().hex[:9]}"
-
     @abstractmethod
-    def validate_params(self) -> bool:
-        """Validate input parameters"""
-        pass
-
-    @abstractmethod
-    def start(self) -> Dict[str, Any]:
-        """Start the task execution"""
-        pass
-
-    def get_current_stage(self) -> int:
-        return self.current_stage
-
-    def save(self) -> Dict[str, Any]:
-        """Serialize task state"""
-        return {
-            "id": self.id,
-            "type": self.type,
-            "status": self.status.value,
-            "current_stage": self.current_stage,
-            "params": self.params,
-            "created_at": self.created_at.isoformat(),
-        }
-
-
-class TaskFactory:
-    """Factory for creating different task types"""
-
-    @staticmethod
-    def create_task(task_type: str, params: Dict[str, Any]) -> Task:
-        if task_type == "essay":
-            return EssayAssistantTask(params)
-        elif task_type == "reading":
-            return ReadingAssistantTask(params)
-        else:
-            raise ValueError(f"Unknown task type: {task_type}")
-
+    def start(self) -> Dict[str, Any]: pass
 
 # ========== ESSAY DATA MODELS ==========
 
 @dataclass
-class EssayData:
-    """Core essay data structure"""
-
-    topic: str = ""
-    essay_type: str = ""
-    word_count: int = 0
-    deadline: Optional[datetime] = None
-    thesis: str = ""
-    thesis_suggestions: List[str] = field(default_factory=list) 
-    outline: Optional["Outline"] = None
-    sections: List["EssaySection"] = field(default_factory=list)
-    revision_passes: List["RevisionIssue"] = field(default_factory=list)
-    timeline: Optional[Dict[str, Any]] = None
-
-
-@dataclass
 class OutlineSection:
-    """Individual section in the outline"""
-
     title: str
     word_count: int
     guiding_question: str = ""
-    content: str = ""
-    completed: bool = False
-
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
 
 @dataclass
 class Outline:
-    """Essay outline with word distribution"""
-
     sections: List[OutlineSection] = field(default_factory=list)
-
-    @property
-    def total_words(self) -> int:
-        return sum(section.word_count for section in self.sections)
-
-    def add_section(self, section: OutlineSection):
-        self.sections.append(section)
-
-    def get_word_distribution(self) -> List[Dict[str, Any]]:
-        total = self.total_words or 1
-        return [
-            {
-                "title": section.title,
-                "word_count": section.word_count,
-                "percentage": round((section.word_count / total) * 100, 1),
-            }
-            for section in self.sections
-        ]
-
 
 @dataclass
 class EssaySection:
-    """Individual essay section with content"""
-
     title: str
     target_words: int
     guiding_question: str = ""
@@ -353,1746 +170,243 @@ class EssaySection:
     actual_words: int = 0
     completed: bool = False
     tree_prompts: Dict[str, str] = field(default_factory=dict)
-
+    id: str = ""
 
 @dataclass
 class RevisionIssue:
-    """Issue found during revision"""
-
     issue_type: str
     description: str
     location: str
-    severity: str = "medium"  # high, medium, low
-    resolved: bool = False
+    severity: str = "medium"
     suggestion: Optional[str] = None
 
+@dataclass
+class EssayData:
+    topic: str = ""
+    essay_type: str = ""
+    word_count: int = 0
+    deadline: Optional[datetime] = None
+    thesis: str = ""
+    thesis_suggestions: List[str] = field(default_factory=list)
+    outline: Optional[Outline] = None
+    sections: List[EssaySection] = field(default_factory=list)
+    revision_passes: List[RevisionIssue] = field(default_factory=list)
 
 # ========== ESSAY STAGES ==========
 
-class EssayStage(ABC):
-    """Abstract base class for essay stages"""
-
-    def __init__(self, name: str, stage_number: int):
-        self.name = name
-        self.stage_number = stage_number
-        self.completed = False
-        self.issues: List[RevisionIssue] = []
-
-    @abstractmethod
-    def execute(self, essay_data: EssayData) -> Dict[str, Any]:
-        """Execute the stage"""
-        pass
-
-    @abstractmethod
-    def validate(self, essay_data: EssayData) -> bool:
-        """Validate stage completion"""
-        pass
-
-
-class PickIdeasStage(EssayStage):
-    """Stage 1: Pick Ideas - Manual thesis entry"""
-
-    def __init__(self):
-        super().__init__("Pick Ideas", 1)
-
-    def execute(self, essay_data: EssayData) -> Dict[str, Any]:
-        """
-        Prepare the Pick Ideas stage.
-        Returns UI lines and logs key info.
-        """
-        ui_lines = [
-            "=== STAGE 1: PICK IDEAS ===",
-            f"Topic: {essay_data.topic}",
-            f"Essay Type: {essay_data.essay_type}",
-            "",
-            "Please provide your thesis statement (1–2 sentences).",
-            "Your thesis should be:",
-            "- Debatable (not a fact)",
-            "- Relevant to the topic",
-            "- Scalable to target word count",
-        ]
-
-        logger.info("Stage 1 (Pick Ideas) started")
-        logger.info("Topic: %s", essay_data.topic)
-        logger.info("Essay type: %s", essay_data.essay_type)
-
-        return {
-            "ready": False,  # waiting for user input
-            "message": "Thesis input required",
-            "stage": {"name": self.name, "number": self.stage_number},
-            "context": {
-                "topic": essay_data.topic,
-                "essay_type": essay_data.essay_type,
-            },
-            "ui_lines": ui_lines,
-        }
-
-    def set_thesis(self, essay_data: EssayData, thesis: str) -> Dict[str, Any]:
-        logger.info("Attempting to set thesis")
-        if not self._validate_thesis(thesis):
-            logger.warning("Invalid thesis provided: %r", thesis)
-            raise ValueError("Invalid thesis statement")
-
-        essay_data.thesis = thesis
-        self.completed = True
-
-        logger.info("Thesis confirmed and stage 1 completed")
-
-        ui_lines = [
-            "Thesis confirmed.",
-            f'"{thesis}"',
-        ]
-
-        return {
-            "ready": True,
-            "message": "Thesis set successfully",
-            "thesis": thesis,
-            "stage": {"name": self.name, "number": self.stage_number},
-            "ui_lines": ui_lines,
-        }
-
-    def _validate_thesis(self, thesis: str) -> bool:
-        if not thesis or len(thesis.strip()) < 10:
-            return False
-
-        sentences = [s.strip() for s in thesis.split(".") if s.strip()]
-        return 1 <= len(sentences) <= 2
-
-    def validate(self, essay_data: EssayData) -> bool:
-        return bool(essay_data.thesis)
-
-
-class OrganizeStage(EssayStage):
-    """Stage 2: Organize - Generate outline with word distribution"""
-
-    def validate_custom_outline(self, essay_data: EssayData) -> List[str]:
-        errors = []
-        outline = essay_data.outline
-        if not outline or not outline.sections:
-            errors.append("Outline has no sections.")
-            return errors
-        titles = [s.title.strip().lower() for s in outline.sections]
-        if "introduction" not in titles:
-            errors.append('Missing "Introduction" section.')
-        if "conclusion" not in titles:
-            errors.append('Missing "Conclusion" section.')
-        total = sum(s.word_count for s in outline.sections)
-        target = essay_data.word_count
-        if target:
-            deviation = abs(total - target) / target
-            if deviation > 0.1:
-                errors.append(
-                    f"Total word count deviates by {round(deviation * 100)}% ({total}/{target})."
-                )
-        for s in outline.sections:
-            if s.word_count <= 0:
-                errors.append(f'Section "{s.title}" must have a positive word count.')
-        return errors
-
-    def __init__(self):
-        super().__init__("Organize", 2)
-
-    def execute(self, essay_data: EssayData) -> Dict[str, Any]:
-        logger.info("Stage 2 (Organize) started")
-        logger.info('Generating outline for thesis: "%s"', essay_data.thesis)
-
-        outline = self._generate_outline(essay_data)
-        essay_data.outline = outline
-        self.completed = True
-
-        ui_lines = [
-            "=== STAGE 2: ORGANIZE (OUTLINE) ===",
-            f'Creating outline for: "{essay_data.thesis}"',
-            "",
-            "📋 Generated Outline:",
-        ]
-        for i, section in enumerate(outline.sections, 1):
-            ui_lines.append(f"{i}. {section.title} ({section.word_count} words)")
-            if section.guiding_question:
-                ui_lines.append(f"   → {section.guiding_question}")
-
-        logger.info("Outline generated with %d sections", len(outline.sections))
-
-        return {
-            "ready": True,
-            "message": "Outline generated successfully",
-            "stage": {"name": self.name, "number": self.stage_number},
-            "outline": outline,
-            "sections": outline.sections,
-            "ui_lines": ui_lines,
-        }
-
-    def _generate_outline(self, essay_data: EssayData) -> Outline:
-        total_words = essay_data.word_count
-        sections: List[OutlineSection] = []
-
-        # Word distribution (MVP percentages)
-        intro_words = round(total_words * 0.125)  # 12.5%
-        conclusion_words = round(total_words * 0.125)  # 12.5%
-        body_words = total_words - intro_words - conclusion_words  # 75%
-
-        # Determine number of body paragraphs
-        body_para_count = self._calculate_body_paragraphs(total_words)
-        words_per_body_para = round(body_words / max(1, body_para_count))
-
-        # Create sections
-        sections.append(
-            OutlineSection(
-                "Introduction",
-                intro_words,
-                "How will you introduce the topic and present your thesis?",
-            )
-        )
-
-        for i in range(1, body_para_count + 1):
-            sections.append(
-                OutlineSection(
-                    f"Body Paragraph {i}",
-                    words_per_body_para,
-                    f"What is your {self._get_ordinal(i)} main argument supporting your thesis?",
-                )
-            )
-
-        sections.append(
-            OutlineSection(
-                "Conclusion",
-                conclusion_words,
-                "How will you summarize and reinforce your thesis?",
-            )
-        )
-
-        return Outline(sections)
-
-    def _calculate_body_paragraphs(self, word_count: int) -> int:
-        if word_count <= 500:
-            return 2
-        elif word_count <= 800:
-            return 3
-        elif word_count <= 1200:
-            return 4
-        else:
-            return 5
-
-    def _get_ordinal(self, n: int) -> str:
-        ordinals = ["first", "second", "third", "fourth", "fifth"]
-        return ordinals[n - 1] if n <= len(ordinals) else f"{n}th"
-
-    def validate(self, essay_data: EssayData) -> bool:
-        return essay_data.outline is not None and len(essay_data.outline.sections) > 0
-
-
-class WriteStage(EssayStage):
-    """Stage 3: Write - Section-by-section drafting with TREE guidance"""
-
-    def __init__(self):
-        super().__init__("Write", 3)
-
-    def execute(self, essay_data: EssayData) -> Dict[str, Any]:
-        logger.info("Stage 3 (Write) started")
-        logger.info("Creating writing sections from outline")
-
-        # Initialize sections from outline
-        # Prerequisite for entering Write: an outline must exist.
-        # NOTE: `validate()` for Write is about *completion* (all sections drafted),
-        # so we must not use it as a prerequisite gate here.
-        if essay_data.outline is None or not essay_data.outline.sections:
-            raise ValueError("Outline must be prepared before writing.")
-        if not essay_data.sections:
-            essay_data.sections = [
-                EssaySection(
-                    title=outline_section.title,
-                    target_words=outline_section.word_count,
-                    guiding_question=outline_section.guiding_question,
-                    tree_prompts=self._generate_tree_prompts(outline_section.title),
-                )
-                for outline_section in essay_data.outline.sections
-            ]
-        
-        self._maybe_enrich_sections_with_llm(essay_data)
-
-        ui_lines = [
-            "=== STAGE 3: WRITE (DRAFT) ===",
-            "Writing spaces created for each section.",
-            "",
-            "TREE structure for each section:",
-        ]
-        for i, section in enumerate(essay_data.sections, 1):
-            ui_lines.append(f"📝 Section {i}: {section.title}")
-            ui_lines.append(f"   Target: {section.target_words} words")
-            if section.guiding_question:
-                ui_lines.append(f"   Guide: {section.guiding_question}")
-            ui_lines.append("   TREE Structure:")
-            for key, prompt in section.tree_prompts.items():
-                ui_lines.append(f"     {key} - {prompt}")
-            ui_lines.append("")
-
-        logger.info("Initialized %d sections for writing", len(essay_data.sections))
-
-        return {
-            "ready": False,  # waiting for user to write content
-            "message": "Ready for drafting - content input required",
-            "stage": {"name": self.name, "number": self.stage_number},
-            "sections": essay_data.sections,
-            "ui_lines": ui_lines,
-        }
-
-    def _generate_tree_prompts(self, section_title: str) -> Dict[str, str]:
-        title_lower = section_title.lower()
-        if "introduction" in title_lower:
-            return {
-                "T": "Topic/Hook sentence - How will you grab attention?",
-                "R": "Reasons preview - What main points will you cover?",
-                "E1": "Explain context - What background does reader need?",
-                "E2": "End with thesis - State your clear position",
-            }
-        elif "conclusion" in title_lower:
-            return {
-                "T": "Topic sentence - Restate thesis in new words",
-                "R": "Recap main reasons - Summarize key arguments",
-                "E1": "Explain significance - Why does this matter?",
-                "E2": "End strong - Final thought or call to action",
-            }
-        else:
-            return {
-                "T": "Topic sentence - State main claim for this paragraph",
-                "R": "Reasons/Evidence - What supports this claim?",
-                "E1": "Explain/Analyze - How does evidence prove your point?",
-                "E2": "End/Transition - Connect to next paragraph",
-            }
-
-    def _maybe_enrich_sections_with_llm(self, essay_data: EssayData) -> None:
-        """Advanced (LLM): enrich guiding questions + TREE prompts per section."""
-        if not is_llm_configured():
-            return
-        if not essay_data.thesis:
-            return
-        if not essay_data.sections:
-            return
-
-        thesis = essay_data.thesis
-
-        for section in essay_data.sections:
-            # Skip if we already have content
-            if section.content.strip():
-                continue
-
-            title = section.title
-            is_body = not any(k in title.lower() for k in ("introduction", "conclusion"))
-
-            try:
-                prompt = f"""
-                You are a writing tutor using SRSD (POW + TREE).
-                The student's thesis is:
-
-                \"{thesis}\"
-
-                We are planning a section titled \"{title}\".
-
-                For this single section, produce JSON of the form:
-                {{
-                  \"guiding_question\": \"...\",
-                  \"topic_sentence_example\": \"...\",
-                  \"reasons\": [\"...\", \"...\"],
-                  \"evidence_hint\": \"...\"
-                }}
-
-                - Make the guiding question concrete and answerable in one paragraph.
-                - The topic sentence should clearly support the thesis.
-                - Reasons should be distinct and relevant.
-                - evidence_hint should suggest what kind of example / quotation / detail the student could use.
-                """
-
-                raw = call_llm(
-                    prompt,
-                    system_prompt=(
-                        "You are a strict JSON generator. Output only the JSON object described, no commentary."
-                    ),
-                    temperature=0.6 if is_body else 0.4,
-                )
-
-                if not raw:
-                    continue
-
-                data = json.loads(raw)
-                gq = str(data.get("guiding_question", "")).strip()
-                ts = str(data.get("topic_sentence_example", "")).strip()
-                reasons = data.get("reasons", [])
-                if not isinstance(reasons, list):
-                    reasons = []
-                reasons = [str(r).strip() for r in reasons if str(r).strip()]
-                ev = str(data.get("evidence_hint", "")).strip()
-
-                if gq:
-                    section.guiding_question = gq
-
-                prompts = section.tree_prompts or {}
-                if ts:
-                    prompts["T"] = ts
-                if reasons:
-                    prompts["R"] = "; ".join(reasons)
-                if ev:
-                    prompts["E1"] = ev
-                if "E2" not in prompts:
-                    prompts["E2"] = "Link this paragraph back to the thesis."
-
-                section.tree_prompts = prompts
-
-            except Exception as e:
-                logger.warning("LLM error while enriching section '%s': %s", title, e)
-
-    def add_content(
-        self, essay_data: EssayData, section_index: int, content: str
-    ) -> Dict[str, Any]:
-        if not (0 <= section_index < len(essay_data.sections)):
-            logger.error("Invalid section index: %s", section_index)
-            raise IndexError("Invalid section index")
-
-        section = essay_data.sections[section_index]
-        section.content = content
-        section.actual_words = self._count_words(content)
-        section.completed = section.actual_words > 0
-
-        logger.info(
-            "Content added to section '%s': %d/%d words",
-            section.title,
-            section.actual_words,
-            section.target_words,
-        )
-
-        # Check if all sections are completed
-        all_completed = all(s.completed for s in essay_data.sections)
-        if all_completed:
-            self.completed = True
-            total_words = sum(s.actual_words for s in essay_data.sections)
-            logger.info(
-                "Draft completed! Total words: %d/%d",
-                total_words,
-                essay_data.word_count,
-            )
-
-        return {
-            "completed": section.completed,
-            "total_completed": all_completed,
-            "section_title": section.title,
-            "actual_words": section.actual_words,
-            "target_words": section.target_words,
-        }
-
-    def _count_words(self, text: str) -> int:
-        words = text.strip().split()
-        return len([word for word in words if word])
-
-    def validate(self, essay_data: EssayData) -> bool:
-        return bool(essay_data.sections) and all(
-            section.completed for section in essay_data.sections
-        )
-
-
-class ReviseStage(EssayStage):
-    """Stage 4: Revise - 7-pass revision system"""
-
-    def __init__(self):
-        super().__init__("Revise", 4)
-        self.passes = [
-            ThesisFocusPass(),
-            StructurePass(),
-            ArgumentEvidencePass(),
-            FlowCohesionPass(),
-            StyleClarityPass(),
-            WordCountPass(),
-            SpellCheckPass(),
-        ]
-
-    def execute(self, essay_data: EssayData) -> Dict[str, Any]:
-        logger.info("Stage 4 (Revise) started")
-        logger.info("Running revision passes")
-
-        all_issues: List[RevisionIssue] = []
-        ui_lines = [
-            "=== STAGE 4: REVISE (POLISH) ===",
-            "Running revision passes...",
-            "",
-        ]
-
-        for i, revision_pass in enumerate(self.passes, 1):
-            logger.info("Revision pass %d: %s", i, revision_pass.name)
-            ui_lines.append(f"🔍 Pass {i}: {revision_pass.name}")
-            issues = revision_pass.analyze(essay_data)
-            all_issues.extend(issues)
-
-            if not issues:
-                ui_lines.append("   ✓ No issues found")
-            else:
-                for issue in issues:
-                    ui_lines.append(
-                        f"   ⚠️  {issue.description} ({issue.location}) [severity: {issue.severity}]"
-                    )
-            ui_lines.append("")
-
-        essay_data.revision_passes = all_issues
-        high_priority_issues = [i for i in all_issues if i.severity == "high"]
-        self.completed = len(high_priority_issues) == 0
-
-        total_issues = len(all_issues)
-        med_issues = len([i for i in all_issues if i.severity == "medium"])
-        low_issues = len([i for i in all_issues if i.severity == "low"])
-
-        ui_lines.append("📊 Revision Summary:")
-        ui_lines.append(f"   Total issues found: {total_issues}")
-        ui_lines.append(f"   High priority: {len(high_priority_issues)}")
-        ui_lines.append(f"   Medium priority: {med_issues}")
-        ui_lines.append(f"   Low priority: {low_issues}")
-
-        logger.info(
-            "Revision summary: total=%d, high=%d, medium=%d, low=%d",
-            total_issues,
-            len(high_priority_issues),
-            med_issues,
-            low_issues,
-        )
-
-        return {
-            "ready": True,
-            "message": "Revision analysis completed",
-            "issues": all_issues,
-            "ready_for_submission": self.completed,
-            "stage": {"name": self.name, "number": self.stage_number},
-            "ui_lines": ui_lines,
-        }
-
-    def validate(self, essay_data: EssayData) -> bool:
-        high_priority_issues = [
-            i for i in essay_data.revision_passes if i.severity == "high"
-        ]
-        return len(high_priority_issues) == 0
-
-
-# ========== REVISION PASSES ==========
-
-class RevisionPass(ABC):
-    """Abstract base class for revision passes"""
-
-    def __init__(self, name: str, description: str):
-        self.name = name
-        self.description = description
-
-    @abstractmethod
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        """Analyze essay and return issues"""
-        pass
-
-
-class ThesisFocusPass(RevisionPass):
-    """Check connection between paragraphs and thesis"""
-
-    def __init__(self):
-        super().__init__(
-            "Thesis & Focus", "Check connection between paragraphs and thesis"
-        )
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-        thesis_keywords = self._extract_keywords(essay_data.thesis)
-
-        for section in essay_data.sections:
-            if (
-                "introduction" in section.title.lower()
-                or "conclusion" in section.title.lower()
-            ):
-                continue  # Skip intro/conclusion
-
-            content_keywords = self._extract_keywords(section.content)
-            overlap = self._calculate_overlap(thesis_keywords, content_keywords)
-
-            if overlap < 0.2:  # Less than 20% keyword overlap
-                issues.append(
-                    RevisionIssue(
-                        "thesis_focus",
-                        "Paragraph may not connect clearly to thesis",
-                        section.title,
-                        "medium",
-                    )
-                )
-
-        return issues
-
-    def _extract_keywords(self, text: str) -> List[str]:
-        stop_words = {
-            "the",
-            "a",
-            "an",
-            "and",
-            "or",
-            "but",
-            "in",
-            "on",
-            "at",
-            "to",
-            "for",
-            "of",
-            "with",
-            "by",
-        }
-        words = re.findall(r"\b\w+\b", text.lower())
-        return [word for word in words if len(word) > 3 and word not in stop_words]
-
-    def _calculate_overlap(self, keywords1: List[str], keywords2: List[str]) -> float:
-        if not keywords1:
-            return 0.0
-        intersection = set(keywords1) & set(keywords2)
-        return len(intersection) / len(keywords1)
-
-
-class StructurePass(RevisionPass):
-    """Validate paragraph structure using TREE"""
-
-    def __init__(self):
-        super().__init__("Structure (TREE)", "Validate paragraph structure")
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-
-        for section in essay_data.sections:
-            content = section.content
-            if not content:
-                continue
-
-            sentences = [s.strip() for s in content.split(".") if s.strip()]
-
-            # Check for topic sentence
-            if sentences:
-                first_sentence = sentences[0]
-                if self._starts_with_quote(first_sentence) or self._is_question(
-                    first_sentence
-                ):
-                    issues.append(
-                        RevisionIssue(
-                            "structure",
-                            "Consider starting with a clear topic sentence",
-                            section.title,
-                            "low",
-                        )
-                    )
-
-            # Check for quotes without explanation
-            quotes = re.findall(r'"[^"]+"', content)
-            for quote in quotes:
-                quote_index = content.index(quote)
-                after_quote = content[
-                    quote_index + len(quote) : quote_index + len(quote) + 100
-                ]
-                if len(after_quote.strip().split(".")[0]) < 20:
-                    issues.append(
-                        RevisionIssue(
-                            "structure",
-                            "Quote needs more analysis/explanation",
-                            section.title,
-                            "medium",
-                        )
-                    )
-
-        return issues
-
-    def _starts_with_quote(self, sentence: str) -> bool:
-        return sentence.startswith('"') or sentence.startswith("'")
-
-    def _is_question(self, sentence: str) -> bool:
-        return "?" in sentence
-    
-
-
-class ArgumentEvidencePass(RevisionPass):
-    """Check claims are supported with evidence"""
-
-    def __init__(self):
-        super().__init__(
-            "Argument & Evidence", "Check claims are supported with evidence"
-        )
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-        strong_claim_words = [
-            "shows",
-            "proves",
-            "demonstrates",
-            "leads to",
-            "causes",
-            "results in",
-        ]
-
-        for section in essay_data.sections:
-            content = section.content.lower()
-
-            for claim_word in strong_claim_words:
-                if claim_word in content:
-                    # Check if there's nearby evidence
-                    claim_index = content.index(claim_word)
-                    surrounding = content[
-                        max(0, claim_index - 100) : claim_index + 200
-                    ]
-
-                    if not self._has_evidence(surrounding):
-                        issues.append(
-                            RevisionIssue(
-                                "evidence",
-                                f'Strong claim "{claim_word}" needs supporting evidence',
-                                section.title,
-                                "medium",
-                            )
-                        )
-
-            # Check for consecutive quotes
-            quotes = re.findall(r'"[^"]+"', content)
-            if len(quotes) >= 2:
-                for i in range(len(quotes) - 1):
-                    quote1_end = content.index(quotes[i]) + len(quotes[i])
-                    quote2_start = content.index(quotes[i + 1])
-                    between = content[quote1_end:quote2_start]
-
-                    analysis_sentences = [
-                        s.strip()
-                        for s in between.split(".")
-                        if s.strip() and len(s.strip()) > 10
-                    ]
-                    if len(analysis_sentences) < 2:
-                        issues.append(
-                            RevisionIssue(
-                                "evidence",
-                                "Consecutive quotes need analysis between them",
-                                section.title,
-                                "medium",
-                            )
-                        )
-
-        return issues
-
-    def _has_evidence(self, text: str) -> bool:
-        evidence_markers = [
-            '"',
-            "example",
-            "study",
-            "research",
-            "data",
-            "according to",
-            "statistics",
-        ]
-        text_lower = text.lower()
-        return any(marker in text_lower for marker in evidence_markers)
-
-
-class FlowCohesionPass(RevisionPass):
-    """Check sentence length and transitions"""
-
-    def __init__(self):
-        super().__init__("Flow & Cohesion", "Check sentence length and transitions")
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-
-        for i, section in enumerate(essay_data.sections):
-            sentences = [s.strip() for s in section.content.split(".") if s.strip()]
-
-            for j, sentence in enumerate(sentences):
-                word_count = len(sentence.split())
-                if word_count > 35:
-                    suggestion = None
-                    if is_llm_configured():
-                        try:
-                            s_prompt = f"""
-                            Rewrite the following sentence into 2 shorter sentences.
-                            Preserve meaning, but improve clarity and flow:
-
-                            "{sentence}"
-                            """
-                            s_raw = call_llm(
-                                s_prompt,
-                                system_prompt=(
-                                    "You are an editor. Return only the rewritten sentence(s), "
-                                    "no explanation."
-                                ),
-                                temperature=0.3,
-                            )
-                            if s_raw:
-                                suggestion = s_raw.strip()
-                        except Exception as e:
-                            logger.warning("LLM failed to simplify sentence: %s", e)
-
-                    issues.append(
-                        RevisionIssue(
-                            "sentence_length",
-                            f"Sentence is quite long ({word_count} words); consider splitting it.",
-                            f"{section.title} (sentence {j + 1})",
-                            "medium",
-                            suggestion=suggestion,
-                        )
-                    )
-
-            # Check transitions between sections
-            if 0 < i < len(essay_data.sections) - 1:
-                if not self._has_transition_words(section.content):
-                    issues.append(
-                        RevisionIssue(
-                            "cohesion",
-                            "Consider adding transition words to connect ideas",
-                            section.title,
-                            "low",
-                        )
-                    )
-
-        return issues
-
-    def _has_transition_words(self, text: str) -> bool:
-        transitions = [
-            "however",
-            "therefore",
-            "furthermore",
-            "moreover",
-            "in addition",
-            "consequently",
-            "thus",
-            "meanwhile",
-        ]
-        text_lower = text.lower()
-        return any(transition in text_lower for transition in transitions)
-
-
-class StyleClarityPass(RevisionPass):
-    """Check for filler words and passive voice"""
-
-    def __init__(self):
-        super().__init__("Style & Clarity", "Check for filler words and passive voice")
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-        filler_phrases = [
-            "in general",
-            "it should be noted",
-            "actually",
-            "basically",
-            "literally",
-        ]
-
-        for section in essay_data.sections:
-            content = section.content.lower()
-
-            # Check filler phrases
-            for filler in filler_phrases:
-                if filler in content:
-                    issues.append(
-                        RevisionIssue(
-                            "style",
-                            f'Consider removing filler phrase: "{filler}"',
-                            section.title,
-                            "low",
-                        )
-                    )
-
-            # Check passive voice
-            passive_pattern = r"\bwas\s+\w+ed\b|\bwere\s+\w+ed\b"
-            passive_matches = re.findall(passive_pattern, content)
-            if len(passive_matches) > 2:
-                issues.append(
-                    RevisionIssue(
-                        "style",
-                        f"Heavy use of passive voice ({len(passive_matches)} instances)",
-                        section.title,
-                        "low",
-                    )
-                )
-
-            # Check word repetition
-            words = content.split()
-            for j in range(len(words) - 2):
-                if words[j] == words[j + 1] or words[j] == words[j + 2]:
-                    issues.append(
-                        RevisionIssue(
-                            "style",
-                            f'Word repetition: "{words[j]}"',
-                            section.title,
-                            "low",
-                        )
-                    )
-                    break
-                # Optional global style suggestion per section (LLM)
-                if is_llm_configured() and section.content.strip():
-                    try:
-                        style_prompt = f"""
-                        You are editing an essay paragraph.
-
-                        Text:
-                        \"\"\"{section.content}\"\"\"
-
-                        Rewrite this text:
-                        - Preserve all important ideas and meaning
-                        - Reduce length by about 15–20%
-                        - Use clear, simple academic English
-                        - Do NOT change first person/third person perspective
-
-                        Return only the rewritten paragraph.
-                        """
-
-                        alt = call_llm(
-                            style_prompt,
-                            system_prompt=(
-                                "You are a concise editor. Only output the rewritten paragraph."
-                            ),
-                            temperature=0.3,
-                        )
-                        if alt:
-                            issues.append(
-                                RevisionIssue(
-                                    "style_rewrite",
-                                    "Optional: shorter, clearer version of this section.",
-                                    section.title,
-                                    "low",
-                                    suggestion=alt.strip(),
-                                )
-                            )
-                    except Exception as e:
-                        logger.warning("LLM style rewrite failed: %s", e)
-        return issues
-
-
-class WordCountPass(RevisionPass):
-    """Check word distribution and target compliance"""
-
-    def __init__(self):
-        super().__init__(
-            "Word Count & Balance", "Check word distribution and target compliance"
-        )
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-        total_actual = 0
-
-        for section in essay_data.sections:
-            total_actual += section.actual_words
-            target = section.target_words
-            actual = section.actual_words
-            deviation = abs(actual - target) / target if target > 0 else 0
-
-            if deviation > 0.2:  # More than 20% deviation
-                issue_type = "over" if actual > target else "under"
-                severity = "medium" if deviation > 0.4 else "low"
-                issues.append(
-                    RevisionIssue(
-                        "word_count",
-                        f"Section is {issue_type} target by "
-                        f"{round(deviation * 100)}% ({actual}/{target} words)",
-                        section.title,
-                        severity,
-                    )
-                )
-
-        # Check overall word count
-        if essay_data.word_count > 0:
-            total_deviation = abs(total_actual - essay_data.word_count) / essay_data.word_count
-        else:
-            total_deviation = 0
-
-        if total_deviation > 0.1:  # More than 10% deviation
-            issue_type = "over" if total_actual > essay_data.word_count else "under"
-            severity = "high" if total_deviation > 0.2 else "medium"
-            issues.append(
-                RevisionIssue(
-                    "word_count",
-                    f"Essay is {issue_type} target by "
-                    f"{round(total_deviation * 100)}% ({total_actual}/{essay_data.word_count} words)",
-                    "Overall essay",
-                    severity,
-                )
-            )
-
-        return issues
-
-
-class SpellCheckPass(RevisionPass):
-    """Basic spelling and grammar checks"""
-
-    def __init__(self):
-        super().__init__(
-            "Spell Check & Mechanics", "Basic spelling and grammar checks"
-        )
-
-    def analyze(self, essay_data: EssayData) -> List[RevisionIssue]:
-        issues: List[RevisionIssue] = []
-
-        for section in essay_data.sections:
-            content = section.content
-
-            # Double spaces
-            if "  " in content:
-                issues.append(
-                    RevisionIssue(
-                        "mechanics",
-                        "Found double spaces",
-                        section.title,
-                        "low",
-                    )
-                )
-
-            # Repeated words
-            repeated_pattern = r"\b(\w+)\s+\1\b"
-            repeated_matches = re.findall(repeated_pattern, content, re.IGNORECASE)
-            if repeated_matches:
-                issues.append(
-                    RevisionIssue(
-                        "mechanics",
-                        f"Repeated words found: {', '.join(repeated_matches)}",
-                        section.title,
-                        "medium",
-                    )
-                )
-
-            # Basic punctuation: lowercase after punctuation
-            if re.search(r"[.!?]\s*[a-z]", content):
-                issues.append(
-                    RevisionIssue(
-                        "mechanics",
-                        "Check capitalization after punctuation",
-                        section.title,
-                        "medium",
-                    )
-                )
-
-        return issues
-
-
-# ========== MAIN ESSAY ASSISTANT TASK ==========
-
 class EssayAssistantTask(Task):
-    """Main essay assistant task implementing SRSD methodology"""
-
     def __init__(self, params: Dict[str, Any]):
         super().__init__(params)
         self.essay_data = EssayData()
-        self.stages: List[EssayStage] = [
-            PickIdeasStage(),
-            OrganizeStage(),
-            WriteStage(),
-            ReviseStage(),
-        ]
-        self.timeline: Optional[Dict[str, Any]] = None
+        self.current_stage_idx = 0
+        self.stage_names = ["Pick Ideas", "Organize", "Write", "Revise"]
 
-    def validate_params(self) -> bool:
-        """Validate input parameters"""
-        topic = self.params.get("topic", "").strip()
-        essay_type = self.params.get("essay_type", "")
-        word_count = self.params.get("word_count", 0)
-        deadline = self.params.get("deadline")
-
-        errors = []
-
-        if not topic:
-            errors.append("Topic is required")
-
-        valid_types = ["opinion", "analytical", "comparative", "interpretive"]
-        if essay_type not in valid_types:
-            errors.append(
-                f"Valid essay type is required ({', '.join(valid_types)})"
-            )
-
-        if not isinstance(word_count, int) or not (100 <= word_count <= 5000):
-            errors.append("Word count must be between 100 and 5000")
-
-        try:
-            deadline_dt = (
-                datetime.fromisoformat(deadline)
-                if isinstance(deadline, str)
-                else deadline
-            )
-            if not isinstance(deadline_dt, datetime) or deadline_dt <= datetime.now():
-                errors.append("Deadline must be in the future")
-        except (ValueError, TypeError):
-            errors.append("Invalid deadline format")
-
-        if errors:
-            logger.error("EssayAssistantTask params validation failed: %s", errors)
-            raise ValueError(f"Validation failed: {', '.join(errors)}")
-
-        # Set validated params to essay data
-        self.essay_data.topic = topic
-        self.essay_data.essay_type = essay_type
-        self.essay_data.word_count = word_count
-        self.essay_data.deadline = (
-            datetime.fromisoformat(deadline)
-            if isinstance(deadline, str)
-            else deadline
-        )
-
-        logger.info(
-            "EssayAssistantTask params validated: topic=%s, type=%s, word_count=%d, deadline=%s",
-            topic,
-            essay_type,
-            word_count,
-            self.essay_data.deadline,
-        )
-
-        return True
-
-    def start(self) -> Dict[str, Any]:
-        """Start the essay assistant task"""
-        self.validate_params()
-        self._generate_timeline()
+    def start(self):
+        self.essay_data.topic = self.params.get("topic", "")
+        self.essay_data.essay_type = self.params.get("essay_type", "opinion")
+        self.essay_data.word_count = int(self.params.get("word_count", 500))
         self.status = TaskStatus.ACTIVE
+        return {"message": "Task started", "stage": self.stage_names[0]}
 
-        intro_lines = [
-            "🚀 STARTING ESSAY ASSISTANT",
-            "============================",
-            f"Topic: {self.essay_data.topic}",
-            f"Type: {self.essay_data.essay_type}",
-            f"Target: {self.essay_data.word_count} words",
-            f"Deadline: {self.essay_data.deadline.strftime('%Y-%m-%d')}",
-            "",
+    def next_stage(self):
+        if self.current_stage_idx == 0:
+            if not self.essay_data.thesis:
+                raise ValueError("Please set a thesis first.")
+            if not self.essay_data.outline:
+                self.generate_initial_outline()
+        elif self.current_stage_idx == 1:
+            if not self.essay_data.outline or not self.essay_data.outline.sections:
+                raise ValueError("Outline cannot be empty.")
+            self.sync_outline_to_sections()
+
+        if self.current_stage_idx < len(self.stage_names) - 1:
+            self.current_stage_idx += 1
+            return {"message": f"Moved to {self.stage_names[self.current_stage_idx]}"}
+        return {"message": "Already at final stage"}
+
+    def prev_stage(self):
+        if self.current_stage_idx > 0:
+            self.current_stage_idx -= 1
+            return {"message": f"Moved back to {self.stage_names[self.current_stage_idx]}"}
+        return {"message": "Already at first stage"}
+
+    def set_thesis(self, text: str):
+        self.essay_data.thesis = text
+        return {"message": "Thesis saved"}
+
+    def generate_thesis_suggestions(self):
+        if not is_llm_configured():
+            raise ValueError("xAI not configured")
+        
+        prompt = f"Generate 3 distinct, arguable thesis statements for an {self.essay_data.essay_type} essay on: {self.essay_data.topic}. Return only the statements as a list."
+        res = call_llm(prompt)
+        if res:
+            self.essay_data.thesis_suggestions = [
+                line.strip().lstrip("1234567890.-*• ") 
+                for line in res.split('\n') 
+                if line.strip()
+            ][:3]
+
+    def generate_initial_outline(self):
+        wc = self.essay_data.word_count
+        sections = [
+            OutlineSection("Introduction", int(wc * 0.15), "Hook and Thesis"),
+            OutlineSection("Body Paragraph 1", int(wc * 0.25), "First Argument"),
+            OutlineSection("Body Paragraph 2", int(wc * 0.25), "Second Argument"),
+            OutlineSection("Body Paragraph 3", int(wc * 0.20), "Third Argument"),
+            OutlineSection("Conclusion", int(wc * 0.15), "Summary and Final Thought")
         ]
-        timeline_lines = self._format_timeline_lines()
-        intro_lines.extend(timeline_lines)
+        self.essay_data.outline = Outline(sections)
 
-        logger.info("EssayAssistantTask started for topic: %s", self.essay_data.topic)
+    def update_outline(self, new_sections_data: List[Dict]):
+        new_sections = []
+        for s in new_sections_data:
+            new_sections.append(OutlineSection(
+                title=s['title'],
+                word_count=int(s['word_count']),
+                guiding_question=s.get('guiding_question', ''),
+                id=s.get('id') or str(uuid.uuid4())[:8]
+            ))
+        self.essay_data.outline = Outline(new_sections)
 
-        stage_payload = self._execute_current_stage()
-        existing_lines = stage_payload.get("ui_lines", [])
-        stage_payload["ui_lines"] = intro_lines + ([""] if existing_lines else []) + existing_lines
+    def sync_outline_to_sections(self):
+        current_map = {s.id: s for s in self.essay_data.sections}
+        new_sections = []
+        for out_sec in self.essay_data.outline.sections:
+            existing = current_map.get(out_sec.id)
+            if existing:
+                existing.title = out_sec.title
+                existing.target_words = out_sec.word_count
+                existing.guiding_question = out_sec.guiding_question
+                new_sections.append(existing)
+            else:
+                new_sections.append(EssaySection(
+                    title=out_sec.title,
+                    target_words=out_sec.word_count,
+                    guiding_question=out_sec.guiding_question,
+                    id=out_sec.id,
+                    tree_prompts=self._get_tree_defaults(out_sec.title)
+                ))
+        self.essay_data.sections = new_sections
 
-        return stage_payload
-
-    def _generate_timeline(self):
-        """Generate a timeline based on deadline"""
-        now = datetime.now()
-        deadline = self.essay_data.deadline
-        total_days = (deadline - now).days
-
-        if total_days < 1:
-            logger.error("Not enough time to complete essay: total_days=%d", total_days)
-            raise ValueError("Not enough time to complete essay")
-
-        # Distribute days across stages
-        if total_days >= 7:
-            stage_distribution = {
-                "ideas": 1,
-                "organize": 1,
-                "write": max(2, int(total_days * 0.6)),
-                "revise": max(1, int(total_days * 0.3)),
-            }
+    def _get_tree_defaults(self, title):
+        if "Intro" in title:
+            return {"T": "Topic/Hook", "R": "Reasons preview", "E1": "Context", "E2": "Thesis"}
+        elif "Conclu" in title:
+            return {"T": "Restate Thesis", "R": "Recap Reasons", "E1": "Significance", "E2": "Final Thought"}
         else:
-            stage_distribution = {
-                "ideas": 1,
-                "organize": 1,
-                "write": max(1, total_days - 2),
-                "revise": 1,
-            }
+            return {"T": "Topic Sentence", "R": "Reasons/Evidence", "E1": "Explanation", "E2": "Transition"}
 
-        stages = [
-            {"name": "Pick Ideas", "days": stage_distribution["ideas"], "start_day": 1},
-            {
-                "name": "Organize",
-                "days": stage_distribution["organize"],
-                "start_day": 1 + stage_distribution["ideas"],
-            },
-            {
-                "name": "Write",
-                "days": stage_distribution["write"],
-                "start_day": 2 + stage_distribution["ideas"],
-            },
-            {
-                "name": "Revise",
-                "days": stage_distribution["revise"],
-                "start_day": 2
-                + stage_distribution["ideas"]
-                + stage_distribution["write"],
-            },
-        ]
+    def save_section_content(self, idx: int, content: str):
+        if 0 <= idx < len(self.essay_data.sections):
+            self.essay_data.sections[idx].content = content
+            self.essay_data.sections[idx].actual_words = len(content.split())
+            self.essay_data.sections[idx].completed = True
 
-        self.timeline = {
-            "total_days": total_days,
-            "stages": stages,
-        }
+    def run_revision(self):
+        issues = []
+        total_words = sum(s.actual_words for s in self.essay_data.sections)
+        if abs(total_words - self.essay_data.word_count) > self.essay_data.word_count * 0.1:
+            issues.append(RevisionIssue("word_count", f"Total words ({total_words}) deviates from target ({self.essay_data.word_count})", "Overall", "high"))
+        for s in self.essay_data.sections:
+            if s.actual_words < s.target_words * 0.5:
+                 issues.append(RevisionIssue("word_count", f"Section '{s.title}' is too short", s.title, "medium"))
+        self.essay_data.revision_passes = issues
 
-        logger.info("Timeline generated: %s", self.timeline)
-
-    def _format_timeline_lines(self) -> List[str]:
-        """Return suggested timeline as list of UI lines"""
-        if not self.timeline:
-            return []
-
-        lines = ["📅 SUGGESTED TIMELINE:"]
-        for i, stage in enumerate(self.timeline["stages"], 1):
-            end_day = stage["start_day"] + stage["days"] - 1
-            days_text = f"Day {stage['start_day']}" + (
-                f"-{end_day}" if stage["days"] > 1 else ""
-            )
-            lines.append(
-                f"   {i}. {stage['name']}: {days_text} "
-                f"({stage['days']} day{'s' if stage['days'] > 1 else ''})"
-            )
-        return lines
-
-    def _execute_current_stage(self) -> Dict[str, Any]:
-        """Execute the current stage"""
-        if self.current_stage >= len(self.stages):
-            self.status = TaskStatus.COMPLETED
-            logger.info("Essay task completed: all stages finished")
-            return {"completed": True, "message": "Essay task completed"}
-
-        stage = self.stages[self.current_stage]
-        logger.info(
-            "Executing stage %d: %s", self.current_stage + 1, stage.name
-        )
-        return stage.execute(self.essay_data)
-
-    def next_stage(self) -> Dict[str, Any]:
-        """Advance to the next stage"""
-        current_stage = self.stages[self.current_stage]
-
-        # Some stages (e.g., Organize/Write initialization) can be safely executed
-        # to populate required data structures before validation.
-        if not current_stage.validate(self.essay_data):
-            # Allow Organize to run if the UI tries to advance without having executed it.
-            if isinstance(current_stage, OrganizeStage):
-                logger.info(
-                    "Auto-executing Organize stage during next_stage() to generate outline."
-                )
-                current_stage.execute(self.essay_data)
-
-            # Allow Write to initialize sections if the UI advanced too early.
-            elif isinstance(current_stage, WriteStage):
-                # Only run initialization if sections are missing; do NOT attempt to
-                # bypass the requirement that the user writes content.
-                if not self.essay_data.sections:
-                    logger.info(
-                        "Auto-executing Write stage during next_stage() to initialize sections."
-                    )
-                    current_stage.execute(self.essay_data)
-
-            # Re-check validation after any safe auto-execution
-            if not current_stage.validate(self.essay_data):
-                logger.warning(
-                    "Cannot advance from stage '%s': validation failed",
-                    current_stage.name,
-                )
-                raise ValueError(
-                    f"Cannot advance: Stage {current_stage.name} not completed properly"
-                )
-
-        self.current_stage += 1
-
-        if self.current_stage >= len(self.stages):
-            self.status = TaskStatus.COMPLETED
-            logger.info("All essay stages completed")
-            return {"completed": True, "message": "All stages completed"}
-
-        return self._execute_current_stage()
-
-    # Helper methods for interacting with specific stages
-    def set_thesis(self, thesis: str) -> Dict[str, Any]:
-        """Set thesis in Pick Ideas stage"""
-        if self.current_stage != 0:
-            logger.error("set_thesis called in wrong stage: %d", self.current_stage)
-            raise ValueError("Can only set thesis in Pick Ideas stage")
-        return self.stages[0].set_thesis(self.essay_data, thesis)
-
-    def add_section_content(
-        self, section_index: int, content: str
-    ) -> Dict[str, Any]:
-        """Add content to a section in Write stage"""
-        if self.current_stage != 2:
-            logger.error(
-                "add_section_content called in wrong stage: %d", self.current_stage
-            )
-            raise ValueError("Can only add content in Write stage")
-        return self.stages[2].add_content(self.essay_data, section_index, content)
-
-    def get_essay_status(self) -> Dict[str, Any]:
-        """Get comprehensive essay status"""
-        total_words = sum(section.actual_words for section in self.essay_data.sections)
-
-        return {
-            "task_id": self.id,
-            "status": self.status.value,
-            "current_stage": self.current_stage + 1,
-            "stage_name": self.stages[self.current_stage].name
-            if self.current_stage < len(self.stages)
-            else "Completed",
-            "progress": f"{round((self.current_stage / len(self.stages)) * 100)}%",
-            "essay_data": {
-                "topic": self.essay_data.topic,
-                "essay_type": self.essay_data.essay_type,
-                "thesis": self.essay_data.thesis,
-                "target_words": self.essay_data.word_count,
-                "actual_words": total_words,
-                "sections": len(self.essay_data.sections),
-                "completed_sections": len(
-                    [s for s in self.essay_data.sections if s.completed]
-                ),
-                "issues": len(self.essay_data.revision_passes),
-                "high_priority_issues": len(
-                    [i for i in self.essay_data.revision_passes if i.severity == "high"]
-                ),
-            },
-            "timeline": self.timeline,
-        }
-
-    def get_full_essay_text(self) -> str:
-        """Get the complete essay text"""
-        return "\n\n".join(
-            section.content
-            for section in self.essay_data.sections
-            if section.content.strip()
-        )
-    
-    def generate_thesis_suggestions(self, n: int = 4) -> Dict[str, Any]:
-        """
-        SRSD Stage 1: Pick Ideas (Advanced / LLM).
-        Given Topic + Essay Type, ask the LLM for several candidate theses.
-        """
-        if not is_llm_configured():
-            raise RuntimeError("LLM is not configured.")
-
-        topic = self.essay_data.topic or "(no topic provided)"
-        essay_type = self.essay_data.essay_type or "(unspecified)"
-        words = self.essay_data.word_count or 1000
-
-        prompt = (
-            "You are a writing tutor using the SRSD model (POW + TREE). "
-            "Generate {n} distinct thesis statements for the essay described below. "
-            "Each thesis must be:\n"
-            "- Debatable (not a mere fact)\n"
-            "- Relevant to the topic\n"
-            "- Scalable to around {words} words\n"
-            "- 1–2 sentences long\n\n"
-            f"Topic: {topic}\n"
-            f"Essay type: {essay_type}\n\n"
-            "Return ONLY JSON:\n"
-            '{ "theses": ["...", "..."] }\n'
-        ).format(n=n, words=words)
-
-        raw = call_llm(
-            prompt,
-            system_prompt=(
-                "You are a strict JSON API. Reply ONLY with JSON of the form "
-                '{"theses": ["...", "..."]}. No explanations.'
-            ),
-            temperature=0.7,
-        )
-
-        if not raw:
-            raise RuntimeError("No response from LLM while generating theses.")
-
-        candidates: List[str] = []
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                for item in data.get("theses", []):
-                    if isinstance(item, str):
-                        text = item.strip()
-                        if text:
-                            candidates.append(text)
-        except Exception:
-            # Fallback: try to parse line-by-line
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                line = re.sub(r"^[\-\*\d\.)]+\s*", "", line)
-                if line:
-                    candidates.append(line)
-
-        candidates = [c for c in candidates if c]
-        if not candidates:
-            raise RuntimeError("LLM did not return usable thesis candidates.")
-
-        if len(candidates) > n:
-            candidates = candidates[:n]
-
-        self.essay_data.thesis_suggestions = candidates
-
-        ui_lines = ["🤖 Suggested thesis statements:", ""]
-        for i, cand in enumerate(candidates, start=1):
-            ui_lines.append(f"{i}. {cand}")
-
-        return {
-            "ready": True,
-            "message": f"Generated {len(candidates)} thesis candidate(s).",
-            "candidates": candidates,
-            "ui_lines": ui_lines,
-        }
-    
-    def generate_thesis_suggestions(self, n: int = 4) -> Dict[str, Any]:
-        """
-        Advanced (LLM) behaviour for SRSD Stage 1: using Topic + Essay Type,
-        generate several candidate thesis statements.
-
-        Returns:
-            {
-                "ready": True,
-                "message": "...",
-                "candidates": [...],
-                "ui_lines": [...]
-            }
-        """
-        if not is_llm_configured():
-            raise RuntimeError(
-                "LLM is not configured. Enable it in the UI and provide an API key."
-            )
-
-        topic = self.essay_data.topic or "(no topic provided)"
-        essay_type = self.essay_data.essay_type or "(unspecified)"
-
-        prompt = (
-            "You are a writing tutor using the Self-Regulated Strategy Development "
-            "(SRSD) model with the POW + TREE mnemonics. "
-            "Given the assignment below, generate {n} distinct, debatable thesis "
-            "statements. Each thesis must be 1–2 sentences, clearly arguable, "
-            "and broad enough to support a {words}-word essay.\n\n"
-            f"Topic: {topic}\n"
-            f"Essay type: {essay_type}\n"
-            "Return your answer strictly as JSON with a single key 'theses' that "
-            "maps to a list of strings."
-        ).format(n=n, words=self.essay_data.word_count or 1000)
-
-        raw = call_llm(
-            prompt,
-            system_prompt=(
-                "You are a careful JSON-only API. Always reply with valid JSON of "
-                'the form {"theses": ["...", "..."]} and nothing else.'
-            ),
-            temperature=0.7,
-        )
-
-        if not raw:
-            raise RuntimeError("LLM did not return any content.")
-
-        candidates: List[str] = []
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                for item in data.get("theses", []):
-                    if isinstance(item, str):
-                        text = item.strip()
-                        if text:
-                            candidates.append(text)
-        except Exception:
-            # Fallback: parse non-JSON replies line-by-line
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                line = re.sub(r"^[\-\*\d\.)]+\s*", "", line)  # strip bullets / numbering
-                if line:
-                    candidates.append(line)
-
-        candidates = [c for c in candidates if c]
-        if not candidates:
-            raise RuntimeError("LLM did not return any thesis candidates.")
-
-        if len(candidates) > n:
-            candidates = candidates[:n]
-
-        self.essay_data.thesis_suggestions = candidates
-
-        ui_lines = ["🤖 Suggested thesis statements:", ""]
-        for i, cand in enumerate(candidates, start=1):
-            ui_lines.append(f"{i}. {cand}")
-
-        return {
-            "ready": True,
-            "message": f"Generated {len(candidates)} thesis candidate(s).",
-            "candidates": candidates,
-            "ui_lines": ui_lines,
-        }
-
+    def get_full_draft(self) -> str:
+        return "\n\n".join([s.content for s in self.essay_data.sections])
 
 # ========== READING ASSISTANT TASK ==========
 
 @dataclass
-class ReadingChunk:
-    source_id: str
-    source_title: str
-    paragraph_index: int  # 1-based index
-    total_paragraphs_for_source: int
-    text: str
-
+class ReadingSource:
+    id: str
+    title: str
+    paragraphs: List[str]
+    current_index: int = 0 
 
 class ReadingAssistantTask(Task):
-    """Task that helps read multiple texts by interleaving their paragraphs.
-
-    Parameters expected in `params`:
-    - texts: List[str] or List[dict{text: str, title?: str, id?: str}]
-    - seed: Optional[int | str] (for reproducible shuffling)
-    - shuffle_each_round: bool = True (shuffle order of sources for each paragraph layer)
-    - sentences_per_fallback_paragraph: int = 8 (when a text has no blank lines)
-    """
-
     def __init__(self, params: Dict[str, Any]):
         super().__init__(params)
-        self.sources: List[Dict[str, Any]] = []  # each: {id, title, paragraphs}
-        self.queue: List[ReadingChunk] = []
-        self.current_index: int = 0
-        self.shuffle_each_round: bool = True
-        self._rng: random.Random = random.Random()
+        self.sources: List[ReadingSource] = []
+        self.current_source_idx: Optional[int] = None
 
-    # ---- lifecycle ----
-    def validate_params(self) -> bool:
-        texts = self.params.get("texts")
-        if not isinstance(texts, list) or not texts:
-            logger.error('Reading task missing "texts" list')
-            raise ValueError(
-                'Reading task requires "texts": list[str] or list[dict{text, title?, id?}]'
-            )
+    def start(self):
+        raw_texts = self.params.get("texts", [])
+        for i, t in enumerate(raw_texts):
+            text_content = t.get("text", "") if isinstance(t, dict) else t
+            title = t.get("title", f"Text {i+1}") if isinstance(t, dict) else f"Text {i+1}"
+            paras = [p.strip() for p in text_content.split('\n\n') if p.strip()]
+            self.sources.append(ReadingSource(f"src_{i}", title, paras))
+        
+        if self.sources:
+            self.current_source_idx = 0
+            self.status = TaskStatus.ACTIVE
+        return {"message": "Reading started"}
 
-        normalized_sources: List[Dict[str, Any]] = []
-        for i, item in enumerate(texts, start=1):
-            if isinstance(item, str):
-                text = item
-                title = f"Text {i}"
-                sid = f"text_{i}"
-            elif isinstance(item, dict) and "text" in item:
-                text = str(item.get("text", ""))
-                title = str(item.get("title") or f"Text {i}")
-                sid = str(item.get("id") or f"text_{i}")
-            else:
-                logger.error("Invalid item for ReadingAssistantTask at index %d", i - 1)
-                raise ValueError(
-                    f'Invalid item at index {i-1}: must be str or dict with "text" key'
-                )
-
-            if not text or not text.strip():
-                continue  # skip empties silently
-            paragraphs = self._split_into_paragraphs(text)
-            normalized_sources.append(
-                {"id": sid, "title": title, "paragraphs": paragraphs}
-            )
-
-        if not normalized_sources:
-            logger.error("No non-empty texts provided to ReadingAssistantTask")
-            raise ValueError("No non-empty texts provided")
-
-        self.sources = normalized_sources
-        self.shuffle_each_round = bool(self.params.get("shuffle_each_round", True))
-        seed = self.params.get("seed", None)
-        self._rng = random.Random(seed) if seed is not None else random.Random()
-
-        logger.info(
-            "ReadingAssistantTask params validated: %d sources, shuffle_each_round=%s",
-            len(self.sources),
-            self.shuffle_each_round,
-        )
-        return True
-
-    def start(self) -> Dict[str, Any]:
-        self.validate_params()
-        self.status = TaskStatus.ACTIVE
-        self._build_queue()
-
-        logger.info("ReadingAssistantTask started with %d sources", len(self.sources))
-        for i, s in enumerate(self.sources, 1):
-            logger.info(
-                "Source %d: %s (%d paragraphs)",
-                i,
-                s["title"],
-                len(s["paragraphs"]),
-            )
-        logger.info("Total interleaved chunks: %d", len(self.queue))
-
-        ui_lines = [
-            "📚 STARTING READING ASSISTANT",
-            "=============================",
-            f"Sources: {len(self.sources)}",
-        ]
-        for i, s in enumerate(self.sources, 1):
-            ui_lines.append(
-                f"   {i}. {s['title']} ({len(s['paragraphs'])} paragraphs)"
-            )
-        ui_lines.append(f"Total interleaved chunks: {len(self.queue)}")
-
-        preview = self._preview_next()
-        existing = preview.get("ui_lines", [])
-        preview["ui_lines"] = ui_lines + ([""] if existing else []) + existing
-        return preview
-
-    # ---- public API ----
-    def get_next_chunk(self) -> Dict[str, Any]:
-        """Return the next interleaved paragraph chunk (and advance)."""
-        if self.current_index >= len(self.queue):
-            self.status = TaskStatus.COMPLETED
-            logger.info("ReadingAssistantTask completed: no more chunks")
-            return {"completed": True, "message": "No more chunks."}
-        chunk = self.queue[self.current_index]
-        self.current_index += 1
-        if self.current_index >= len(self.queue):
-            self.status = TaskStatus.COMPLETED
-        return {
-            "chunk_number": self.current_index,
-            "total_chunks": len(self.queue),
-            "chunk": chunk.__dict__,
-            "remaining": len(self.queue) - self.current_index,
-            "completed": self.status == TaskStatus.COMPLETED,
-        }
-
-    def get_reading_status(self) -> Dict[str, Any]:
-        """Detailed status for TaskManager.get_task_status()."""
-        next_meta = None
-        if self.current_index < len(self.queue):
-            nxt = self.queue[self.current_index]
-            next_meta = {
-                "source_id": nxt.source_id,
-                "source_title": nxt.source_title,
-                "paragraph_index": nxt.paragraph_index,
-                "total_paragraphs_for_source": nxt.total_paragraphs_for_source,
-            }
-        return {
-            "task_id": self.id,
-            "status": self.status.value,
-            "type": self.type,
-            "progress": f"{round((self.current_index / max(1, len(self.queue))) * 100)}%",
-            "sources": [
-                {
-                    "id": s["id"],
-                    "title": s["title"],
-                    "paragraphs": len(s["paragraphs"]),
-                }
-                for s in self.sources
-            ],
-            "delivered": self.current_index,
-            "remaining": max(0, len(self.queue) - self.current_index),
-            "total_chunks": len(self.queue),
-            "next_chunk": next_meta,
-        }
-
-    # ---- internals ----
-    def _split_into_paragraphs(self, text: str) -> List[str]:
-        # Normalize newlines
-        normalized = re.sub(r"\r\n?", "\n", text)
-        normalized = re.sub(r"\n{3,}", "\n\n", normalized)
-        paragraphs = [
-            p.strip() for p in re.split(r"\n\s*\n", normalized) if p.strip()
-        ]
-
-        # Fallback: if there is a single very long block, chunk by sentences
-        if len(paragraphs) == 1:
-            sentences = re.split(r"(?<=[.!?])\s+", paragraphs[0])
-            max_sent = int(self.params.get("sentences_per_fallback_paragraph", 8))
-            if len(sentences) > max_sent:
-                paragraphs = [
-                    " ".join(sentences[i : i + max_sent]).strip()
-                    for i in range(0, len(sentences), max_sent)
-                ]
-                paragraphs = [p for p in paragraphs if p]
-        return paragraphs
-
-    def _build_queue(self) -> None:
-        max_len = max(len(s["paragraphs"]) for s in self.sources)
-        queue: List[ReadingChunk] = []
-        for p_idx in range(max_len):
-            order = [
-                i
-                for i, s in enumerate(self.sources)
-                if p_idx < len(s["paragraphs"])
-            ]
-            if self.shuffle_each_round and len(order) > 1:
-                self._rng.shuffle(order)
-            for i in order:
-                s = self.sources[i]
-                queue.append(
-                    ReadingChunk(
-                        source_id=s["id"],
-                        source_title=s["title"],
-                        paragraph_index=p_idx + 1,
-                        total_paragraphs_for_source=len(s["paragraphs"]),
-                        text=s["paragraphs"][p_idx],
-                    )
-                )
-        self.queue = queue
-        self.current_index = 0
-
-    def _preview_next(self) -> Dict[str, Any]:
-        if self.current_index >= len(self.queue):
-            self.status = TaskStatus.COMPLETED
+    def get_current_chunk(self):
+        if self.current_source_idx is None: return None
+        src = self.sources[self.current_source_idx]
+        if src.current_index < len(src.paragraphs):
             return {
-                "completed": True,
-                "message": "All chunks delivered",
-                "remaining": 0,
+                "source_title": src.title,
+                "text": src.paragraphs[src.current_index],
+                "para_num": src.current_index + 1,
+                "total_paras": len(src.paragraphs),
+                "is_finished": False
             }
-        nxt = self.queue[self.current_index]
-        return {
-            "ready": True,
-            "message": "Use TaskManager.advance_task(task_id) to pull the next chunk.",
-            "next_chunk_meta": {
-                "source_id": nxt.source_id,
-                "source_title": nxt.source_title,
-                "paragraph_index": nxt.paragraph_index,
-                "total_paragraphs_for_source": nxt.total_paragraphs_for_source,
-            },
-            "remaining": len(self.queue) - self.current_index,
-        }
+        else:
+            return {"source_title": src.title, "text": "End of text.", "is_finished": True}
 
+    def advance(self, mode: str):
+        if self.current_source_idx is None: return
+        current_src = self.sources[self.current_source_idx]
+        
+        if current_src.current_index < len(current_src.paragraphs):
+            current_src.current_index += 1
+
+        if mode == 'switch':
+            start = self.current_source_idx
+            for i in range(1, len(self.sources) + 1):
+                idx = (start + i) % len(self.sources)
+                if self.sources[idx].current_index < len(self.sources[idx].paragraphs):
+                    self.current_source_idx = idx
+                    return
+        elif mode == 'continue':
+            if current_src.current_index >= len(current_src.paragraphs):
+                self.advance(mode='switch')
+
+    def get_progress(self):
+        return [
+            {
+                "title": s.title,
+                "read": s.current_index,
+                "total": len(s.paragraphs),
+                "percent": s.current_index / len(s.paragraphs) if s.paragraphs else 0
+            }
+            for s in self.sources
+        ]
 
 # ========== TASK MANAGER ==========
 
 class TaskManager:
-    """Manages multiple tasks and their lifecycle"""
-
     def __init__(self):
         self.tasks: Dict[str, Task] = {}
 
-    def create_task(self, task_type: str, params: Dict[str, Any]) -> Task:
-        """Create a new task"""
-        task = TaskFactory.create_task(task_type, params)
-        self.tasks[task.id] = task
-        logger.info("Task created: id=%s, type=%s", task.id, task.type)
-        return task
-
-    def get_task(self, task_id: str) -> Task:
-        """Get a task by ID"""
-        if task_id not in self.tasks:
-            logger.error("Task not found: %s", task_id)
-            raise KeyError(f"Task not found: {task_id}")
-        return self.tasks[task_id]
-
-    def start_task(self, task_id: str) -> Dict[str, Any]:
-        """Start a task"""
-        task = self.get_task(task_id)
-        logger.info("Starting task: id=%s, type=%s", task.id, task.type)
-        return task.start()
-
-    def advance_task(self, task_id: str) -> Dict[str, Any]:
-        """Advance a task to next stage or fetch next chunk for reading tasks"""
-        task = self.get_task(task_id)
-        logger.info("Advancing task: id=%s, type=%s", task.id, task.type)
-        if isinstance(task, EssayAssistantTask):
-            return task.next_stage()
-        elif isinstance(task, ReadingAssistantTask):
-            return task.get_next_chunk()
+    def create_task(self, type_: str, params: Dict) -> Task:
+        if type_ == "essay":
+            t = EssayAssistantTask(params)
         else:
-            raise ValueError("Task type does not support stage advancement")
+            t = ReadingAssistantTask(params)
+        self.tasks[t.id] = t
+        return t
 
-    def get_task_status(self, task_id: str) -> Dict[str, Any]:
-        """Get task status"""
-        task = self.get_task(task_id)
-        if isinstance(task, EssayAssistantTask):
-            return task.get_essay_status()
-        elif isinstance(task, ReadingAssistantTask):
-            return task.get_reading_status()
-        else:
-            return task.save()
+    def get_task(self, id_: str) -> Task:
+        return self.tasks.get(id_)
 
-    def get_all_tasks(self) -> List[Dict[str, Any]]:
-        """Get all tasks summary"""
-        return [
-            {
-                "id": task.id,
-                "type": task.type,
-                "status": task.status.value,
-                "created_at": task.created_at.isoformat(),
-            }
-            for task in self.tasks.values()
-        ]
-
-    def delete_task(self, task_id: str) -> bool:
-        """Delete a task"""
-        if task_id in self.tasks:
-            logger.info("Deleting task: %s", task_id)
-            del self.tasks[task_id]
-            return True
-        logger.warning("Delete called for non-existent task: %s", task_id)
-        return False
+    def get_all_tasks(self):
+        return [{"id": t.id, "type": t.type, "status": t.status.value} for t in self.tasks.values()]
+    
+    def delete_task(self, id_: str):
+        if id_ in self.tasks:
+            del self.tasks[id_]

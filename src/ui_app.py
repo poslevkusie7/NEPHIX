@@ -1,502 +1,398 @@
 import streamlit as st
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
-
+import pandas as pd
 from assistant_core import (
-    TaskManager,
-    EssayAssistantTask,
-    ReadingAssistantTask,
-    TaskStatus,
-    configure_llm,
-    is_llm_configured,
-    infer_essay_parameters_from_text
+    TaskManager, EssayAssistantTask, ReadingAssistantTask, 
+    configure_llm, is_llm_configured, infer_essay_parameters_from_text
 )
 
+# --------- Custom CSS ---------
+def inject_custom_css():
+    st.markdown("""
+    <style>
+    /* Button Colors Mapping */
+    
+    /* "Set Thesis" / "Save" - Greenish #A3B9A5 */
+    div[data-testid="stButton"] button:has(div:contains("Set thesis")),
+    div[data-testid="stButton"] button:has(div:contains("Save")) {
+        background-color: #A3B9A5 !important;
+        color: white !important;
+        border: none;
+    }
 
-# --------- Session state setup ---------
+    /* "Next Stage" / "Switch Text" - Orange #F59E0B */
+    div[data-testid="stButton"] button:has(div:contains("Next stage")),
+    div[data-testid="stButton"] button:has(div:contains("Switch text")), 
+    div[data-testid="stButton"] button:has(div:contains("Generate outline")) {
+        background-color: #F59E0B !important;
+        color: white !important;
+        border: none;
+    }
 
+    /* "Continue here" - Blue #5BA4E6 */
+    div[data-testid="stButton"] button:has(div:contains("Continue here")) {
+        background-color: #5BA4E6 !important;
+        color: white !important;
+        border: none;
+    }
+    
+    /* Back Buttons */
+    div[data-testid="stButton"] button:has(div:contains("Back")) {
+        background-color: #f0f2f6;
+        color: #31333F;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --------- Session State ---------
 if "task_manager" not in st.session_state:
     st.session_state.task_manager = TaskManager()
-
 if "current_task_id" not in st.session_state:
     st.session_state.current_task_id = None
 
-# --------- LLM configuration (sidebar) ---------
-
-
-def setup_llm_from_sidebar() -> None:
-    """
-    Expose LLM configuration controls in the sidebar.
-
-    Values entered here are forwarded to `assistant_core.configure_llm`,
-    which `EssayAssistantTask` uses for model calls.
-    """
-    with st.sidebar:
-        st.subheader("🔌 LLM settings")
-        use_llm = st.checkbox(
-            "Enable AI features (LLM)",
-            value=False,
-            help="Turn this on to use an external LLM for thesis suggestions, etc.",
-        )
-        api_key = st.text_input(
-            "API key",
-            type="password",
-            help=(
-                "API key for your LLM provider (e.g., OpenAI). "
-                "If left blank, the environment variable OPENAI_API_KEY is used."
-            ),
-        )
-        model = st.text_input(
-            "Model name",
-            value="gpt-4o-mini",
-            help="Model identifier, e.g. 'gpt-4o-mini'.",
-        )
-        base_url = st.text_input(
-            "Base URL (optional)",
-            value="",
-            help=(
-                "For self-hosted / Azure / proxy endpoints that speak the "
-                "OpenAI-compatible Chat Completions API."
-            ),
-        )
-
-    configure_llm(
-        enabled=use_llm,
-        api_key=api_key.strip() or None,
-        model=model.strip() or "gpt-4o-mini",
-        base_url=base_url.strip() or None,
-    )
-
-# --------- Helper: render common stage UI lines ---------
-
-def render_ui_lines(payload: Dict[str, Any]) -> None:
-    """Render ui_lines and basic stage/context info if present."""
-    stage = payload.get("stage")
-    context = payload.get("context")
-    ui_lines = payload.get("ui_lines")
-
-    if stage:
-        st.subheader(f"Stage {stage.get('number', '?')}: {stage.get('name', '')}")
-
-    if context:
-        topic = context.get("topic")
-        essay_type = context.get("essay_type")
-        if topic:
-            st.write(f"**Topic:** {topic}")
-        if essay_type:
-            st.write(f"**Essay type:** {essay_type}")
-
-    if ui_lines:
-        for line in ui_lines:
-            if line.strip():
-                st.write(line)
-            else:
-                st.write("")
-
-
-# --------- Essay UI: create task ---------
-
-def create_essay_task_ui():
-    st.header("📄 Essay Assistant")
-
-    st.markdown("#### Option A: Paste assignment text (Advanced, uses LLM)")
-    assignment_text = st.text_area(
-        "Assignment description (optional)",
-        help=(
-            "Paste the full prompt here, e.g. "
-            '"Write a 1000-word opinion essay on Martin Eden, due next Friday."'
-        ),
-    )
-    if assignment_text and is_llm_configured():
-        if st.button("✨ Extract topic, type, word count, deadline"):
-            try:
-                parsed = infer_essay_parameters_from_text(assignment_text)
-                st.success("Extracted parameters (you can copy them into the form below):")
-                st.write(f"**Topic:** {parsed['topic'] or '—'}")
-                st.write(f"**Essay type:** {parsed['essay_type'] or '—'}")
-                st.write(f"**Word count:** {parsed['word_count'] or '—'}")
-                st.write(f"**Deadline (ISO):** {parsed['deadline'] or '—'}")
-                with st.expander("Raw LLM JSON", expanded=False):
-                    st.json(parsed["raw"])
-            except Exception as e:
-                st.error(f"Extraction failed: {e}")
-
-    st.markdown("---")
-    st.markdown("#### Option B: Enter parameters manually")
+# --------- Sidebar: Tasks & Settings ---------
+def sidebar_ui():
+    st.sidebar.title("🤖 Assistant")
     
-    with st.form("essay_form"):
-        topic = st.text_input(
-            "Topic",
-            "The impact of social media on modern communication"
-        )
-        essay_type = st.selectbox(
-            "Essay type",
-            ["opinion", "analytical", "comparative", "interpretive"],
-            index=0,
-        )
-        word_count = st.number_input(
-            "Target word count",
-            min_value=100,
-            max_value=5000,
-            value=1000,
-            step=50,
-        )
-        days = st.number_input(
-            "Days until deadline",
-            min_value=1,
-            value=5,
-            step=1,
-        )
-        submitted = st.form_submit_button("Create Essay Task")
+    # LLM Setup - xAI ONLY
+    with st.sidebar.expander("⚙️ xAI Settings", expanded=True):
+        use_llm = st.checkbox("Enable xAI", value=True)
+        
+        # Only ask for Key and Model (defaulted to Grok)
+        api_key = st.text_input("xAI API Key", type="password", help="Starts with 'xai-...'")
+        model_name = st.text_input("Model", value="grok-beta")
 
-    if submitted:
-        deadline = (datetime.now() + timedelta(days=int(days))).isoformat()
-        manager: TaskManager = st.session_state.task_manager
-        task = manager.create_task("essay", {
-            "topic": topic,
-            "essay_type": essay_type,
-            "word_count": int(word_count),
-            "deadline": deadline,
-        })
-        st.session_state.current_task_id = task.id
-        result = manager.start_task(task.id)
-
-        st.success(f"Created essay task `{task.id}`")
-
-        # Show initial stage info from backend
-        render_ui_lines(result)
-        with st.expander("Raw response (debug)", expanded=False):
-            st.json(result)
-
-        # 🔽 Immediately show the specialised "solve" UI for this task
-        st.markdown("---")
-        st.info("Continue working on this essay below:")
-        essay_stage_controls()  # uses current_task_id from session
-
-
-def essay_stage_controls():
-    manager: TaskManager = st.session_state.task_manager
-    task_id = st.session_state.current_task_id
-    task = manager.get_task(task_id)
-    assert isinstance(task, EssayAssistantTask)
-
-    status = task.get_essay_status()
-    st.subheader("Essay Status")
-    st.json(status)
-
-    stage_name = status["stage_name"]
-    current_stage = status["current_stage"]
-    st.markdown(f"### Current Stage: {current_stage} – {stage_name}")
-
-    # Stage 1: thesis
-    if current_stage == 1:
-        thesis = st.text_area(
-            "Enter thesis (1–2 sentences)",
-            value=task.essay_data.thesis or "",
+        # Configure the backend
+        configure_llm(
+            enabled=use_llm, 
+            api_key=api_key if api_key else None, 
+            model=model_name
         )
 
-        # Optional LLM support for SRSD Stage 1: Pick Ideas
-        if is_llm_configured():
-            if st.button("💡 Suggest thesis with AI"):
+        # TEST BUTTON
+        if st.button("🔌 Test xAI Connection"):
+            if not api_key:
+                st.error("Please enter an xAI API Key first.")
+            else:
                 try:
-                    res = task.generate_thesis_suggestions()
-                    st.success(res.get("message", "Got suggestions from the model."))
-                    st.info(
-                        "Copy one of the options below into the box above, "
-                        "then click 'Set thesis'."
-                    )
-                    for i, cand in enumerate(res.get("candidates", []), start=1):
-                        st.markdown(f"**Option {i}:** {cand}")
+                    from assistant_core import call_llm
+                    with st.spinner("Connecting to Grok..."):
+                        resp = call_llm("Say 'xAI Connection Successful'", temperature=0.1)
+                        st.success(f"{resp}")
                 except Exception as e:
-                    st.error(f"LLM error: {e}")
+                    st.error(f"Connection Failed:\n{e}")
 
-        col1, col2 = st.columns(2)
-        if col1.button("Set thesis"):
-            try:
-                res = task.set_thesis(thesis)
-                st.success(res["message"])
-                render_ui_lines(res)
+    st.sidebar.divider()
+    
+    # Task List
+    st.sidebar.subheader("Tasks")
+    manager = st.session_state.task_manager
+    tasks = manager.get_all_tasks()
+    
+    if not tasks:
+        st.sidebar.info("No tasks yet.")
+    
+    for t in tasks:
+        is_active = (st.session_state.current_task_id == t['id'])
+        
+        if is_active:
+            c = st.sidebar.container()
+            c.markdown(f"✅ **{t['type']}**")
+            c.caption(f"ID: {t['id']}")
+        else:
+            col1, col2 = st.sidebar.columns([4, 1])
+            if col1.button(f"{t['type']} \n {t['id'][:6]}...", key=t['id']):
+                st.session_state.current_task_id = t['id']
                 st.rerun()
-            except Exception as e:
-                st.error(str(e))
-        if col2.button("Next stage ▶"):
-            try:
-                res = manager.advance_task(task_id)
-                st.success("Moved to next stage")
-                render_ui_lines(res)
-                with st.expander("Raw response (debug)", expanded=False):
-                    st.json(res)
+            if col2.button("🗑️", key=f"del_{t['id']}"):
+                manager.delete_task(t['id'])
+                if is_active: st.session_state.current_task_id = None
                 st.rerun()
-            except Exception as e:
-                st.error(str(e))
+        
+        if is_active:
+            st.sidebar.markdown("---")
 
-    # Stage 2: Organize
-    elif current_stage == 2:
-        st.write("Outline will be generated from topic + word count.")
-
-        # Display current outline if already generated
-        if task.essay_data.outline and getattr(task.essay_data.outline, "sections", None):
-            with st.expander("Current outline", expanded=True):
-                for i, s in enumerate(task.essay_data.outline.sections, start=1):
-                    st.markdown(
-                        f"**{i}. {s.title}** — {getattr(s, 'word_count', '—')} words"  # type: ignore
-                    )
-                    gq = getattr(s, "guiding_question", "")
-                    if gq:
-                        st.caption(gq)
-
-        if st.button("Generate outline & go to Write stage ▶"):
-            try:
-                # With the updated assistant_core, this will auto-execute Organize if needed,
-                # then advance to Write.
-                res2 = manager.advance_task(task_id)  # 2 -> 3
-                st.success("Outline ready. Moved to Write stage.")
-                render_ui_lines(res2)
-                with st.expander("Raw response (debug)", expanded=False):
-                    st.json(res2)
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
-
-    # Stage 3: Write
-    elif current_stage == 3:
-        st.write("Fill content for each section.")
-
-        sections = task.essay_data.sections
-        if not sections:
-            st.info("No sections initialized yet.")
-            if st.button("Initialize writing sections ▶"):
-                try:
-                    res_init = task.stages[2].execute(task.essay_data)  # WriteStage
-                    st.success("Writing sections initialized.")
-                    render_ui_lines(res_init)
-                    with st.expander("Raw response (debug)", expanded=False):
-                        st.json(res_init)
+# --------- Main UI ---------
+def main():
+    st.set_page_config(layout="wide", page_title="Essay & Reading Assistant")
+    inject_custom_css()
+    sidebar_ui()
+    
+    manager = st.session_state.task_manager
+    
+    # Top Tab Navigation
+    tab_create, tab_work = st.tabs(["🆕 Create New Task", "📝 Work on Task"])
+    
+    # --- Create Tab ---
+    with tab_create:
+        type_ = st.radio("Task Type", ["Essay Task", "Reading Task"], horizontal=True)
+        
+        if type_ == "Essay Task":
+            st.subheader("Create Essay Task")
+            desc = st.text_area("Paste assignment description (optional)")
+            
+            # Auto-fill button with Error Handling
+            if st.button("✨ Auto-fill from text"):
+                if desc and is_llm_configured():
+                    try:
+                        with st.spinner("Analyzing text with Grok..."):
+                            params = infer_essay_parameters_from_text(desc)
+                            st.session_state['new_essay_params'] = params
+                            st.success("Parameters extracted!")
+                    except Exception as e:
+                        st.error(f"Auto-fill failed: {e}")
+                elif not desc:
+                    st.warning("Please paste description text first.")
+                else:
+                    st.error("xAI is not configured.")
+            
+            defaults = st.session_state.get('new_essay_params', {})
+            
+            with st.form("new_essay"):
+                topic = st.text_input("Topic", value=defaults.get('topic', ''))
+                e_type = st.selectbox("Type", ["opinion", "analytical", "comparative"], 
+                                    index=0 if defaults.get('essay_type')=='opinion' else 1)
+                wc = st.number_input("Word Count", value=defaults.get('word_count', 500))
+                if st.form_submit_button("Create Essay Task"):
+                    t = manager.create_task("essay", {"topic": topic, "essay_type": e_type, "word_count": wc})
+                    t.start()
+                    st.session_state.current_task_id = t.id
+                    st.success("Task Created!")
                     st.rerun()
-                except Exception as e:
-                    st.error(str(e))
+
+        else:
+            st.subheader("Create Reading Task")
+            if 'num_texts' not in st.session_state: st.session_state.num_texts = 2
+            
+            texts_input = []
+            for i in range(st.session_state.num_texts):
+                st.markdown(f"**Text {i+1}**")
+                title = st.text_input(f"Title {i+1}", key=f"rt_{i}")
+                content = st.text_area(f"Content {i+1}", key=f"rc_{i}")
+                texts_input.append({"title": title, "text": content})
+            
+            if st.button("Add another text"):
+                st.session_state.num_texts += 1
+                st.rerun()
+            
+            if st.button("Create Reading Task"):
+                valid_texts = [t for t in texts_input if t['text'].strip()]
+                if valid_texts:
+                    t = manager.create_task("reading", {"texts": valid_texts})
+                    t.start()
+                    st.session_state.current_task_id = t.id
+                    st.rerun()
+
+    # --- Work Tab ---
+    with tab_work:
+        if not st.session_state.current_task_id:
+            st.info("Please select or create a task.")
             return
 
-        for idx, sec in enumerate(sections):
-            with st.expander(
-                f"{idx + 1}. {sec.title} (target {sec.target_words} words)",
-                expanded=False,
-            ):
-                if sec.guiding_question:
-                    st.caption(sec.guiding_question)
-                if sec.tree_prompts:
-                    st.markdown("**TREE prompts:**")
-                    for key, text in sec.tree_prompts.items():
-                        st.write(f"- **{key}**: {text}")
+        task = manager.get_task(st.session_state.current_task_id)
+        if not task:
+            st.error("Task not found.")
+            return
 
-                default_text = sec.content or ""
-                new_text = st.text_area(
-                    f"Content for {sec.title}",
-                    value=default_text,
-                    key=f"section_{idx}",
-                    height=180,
-                )
-                if st.button(f"Save section {idx + 1}", key=f"save_{idx}"):
-                    try:
-                        res = task.add_section_content(idx, new_text)
-                        st.success(
-                            f"Saved. Section completed: {res['completed']}. "
-                            f"All sections done: {res['total_completed']}"
-                        )
-                        st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
+        if isinstance(task, EssayAssistantTask):
+            render_essay_ui(task)
+        elif isinstance(task, ReadingAssistantTask):
+            render_reading_ui(task)
 
-        if st.button("All sections done → Revise ▶"):
+# --------- Essay UI Implementation ---------
+def render_essay_ui(task: EssayAssistantTask):
+    data = task.essay_data
+    stage = task.current_stage_idx
+    
+    st.markdown(f"### 📄 {task.stage_names[stage]}")
+    st.caption(f"Topic: **{data.topic}** | Type: {data.essay_type} | Target: {data.word_count} words")
+    st.progress((stage + 1) / 4)
+    st.divider()
+
+    # --- Stage 1: Pick Ideas ---
+    if stage == 0:
+        st.info("Enter your thesis statement (1-2 sentences).")
+        
+        # Suggestions with Error Handling
+        if is_llm_configured():
+            if st.button("💡 Get xAI Suggestions"):
+                try:
+                    with st.spinner("Asking Grok..."):
+                        task.generate_thesis_suggestions()
+                        if not task.essay_data.thesis_suggestions:
+                            st.warning("Grok didn't return a list. Try again.")
+                        else:
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"xAI Error: {e}")
+        
+        if data.thesis_suggestions:
+            st.markdown("### 🤖 Suggestions:")
+            for s in data.thesis_suggestions:
+                st.info(f"• {s}")
+        
+        st.markdown("---")
+        new_thesis = st.text_area("Your Thesis", value=data.thesis)
+        
+        col1, col2 = st.columns([1, 4])
+        if col1.button("Set thesis"): 
+            task.set_thesis(new_thesis)
+            st.success("Thesis set!")
+            st.rerun()
+            
+        if col2.button("Next stage ▶"): 
             try:
-                res = manager.advance_task(task_id)  # 3 -> 4
-                st.success("Moved to Revise stage.")
-                render_ui_lines(res)
-                with st.expander("Raw response (debug)", expanded=False):
-                    st.json(res)
+                task.next_stage()
                 st.rerun()
             except Exception as e:
                 st.error(str(e))
 
-    # Stage 4: Revise
-    elif current_stage == 4:
-        st.write("Run revision and see issues.")
-
-        if st.button("Run revision passes"):
+    # --- Stage 2: Organize ---
+    elif stage == 1:
+        st.write("Edit your outline below.")
+        
+        if data.outline:
+            outline_data = [
+                {"title": s.title, "word_count": s.word_count, "guiding_question": s.guiding_question, "id": s.id}
+                for s in data.outline.sections
+            ]
+            edited_data = st.data_editor(
+                outline_data, 
+                num_rows="dynamic", 
+                column_config={
+                    "title": "Section Title",
+                    "word_count": st.column_config.NumberColumn("Words", min_value=0, max_value=5000),
+                    "guiding_question": "Guiding Question",
+                    "id": None 
+                },
+                use_container_width=True
+            )
+            task.update_outline(edited_data)
+        
+        col_back, col_next = st.columns([1, 4])
+        if col_back.button("◀ Back"):
+            task.prev_stage()
+            st.rerun()
+            
+        if col_next.button("Generate outline & go to Write stage"): 
             try:
-                revise_stage = task.stages[3]
-                res = revise_stage.execute(task.essay_data)
-                st.success("Revision done.")
-                render_ui_lines(res)
-                with st.expander("Raw response (debug)", expanded=False):
-                    st.json(res)
+                task.next_stage()
+                st.rerun()
             except Exception as e:
                 st.error(str(e))
 
-        issues = task.essay_data.revision_passes
-        if issues:
-            st.subheader("Revision issues")
-            for issue in issues:
-                st.markdown(
-                    f"- **[{issue.severity}]** `{issue.issue_type}` at *{issue.location}*: "
-                    f"{issue.description}"
-                )
-        else:
-            st.info("No issues recorded yet.")
+    # --- Stage 3: Write ---
+    elif stage == 2:
+        st.write("Fill content for each section.")
+        
+        col_back, col_next = st.columns([1, 4])
+        if col_back.button("◀ Back"):
+            task.prev_stage()
+            st.rerun()
+        if col_next.button("All sections done Revise"): 
+            try:
+                task.next_stage()
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+        
+        st.divider()
 
-        if st.button("Mark essay as completed ✅"):
-            task.status = TaskStatus.COMPLETED
-            st.success("Essay task marked as completed.")
+        for i, sec in enumerate(data.sections):
+            with st.expander(f"{sec.title} ({sec.target_words} words)", expanded=not sec.completed):
+                st.caption(sec.guiding_question)
+                
+                if sec.tree_prompts:
+                    st.markdown("#### TREE structure:")
+                    prompts = sec.tree_prompts
+                    st.markdown(f"<span style='color:#7E2A8A'><b>T</b></span>: {prompts.get('T','')}", unsafe_allow_html=True)
+                    st.markdown(f"<span style='color:#E69543'><b>R</b></span>: {prompts.get('R','')}", unsafe_allow_html=True)
+                    st.markdown(f"<span style='color:#5DAA4F'><b>E</b></span>: {prompts.get('E1','')}", unsafe_allow_html=True)
+                    st.markdown(f"<span style='color:#E03A2D'><b>E</b></span>: {prompts.get('E2','')}", unsafe_allow_html=True)
+                
+                val = st.text_area(f"Content for {sec.title}", value=sec.content, height=150, key=f"sec_{sec.id}")
+                
+                if st.button(f"Save {sec.title}", key=f"save_{sec.id}"): 
+                    task.save_section_content(i, val)
+                    st.success("Saved")
+                    st.rerun()
 
+    # --- Stage 4: Revise ---
+    elif stage == 3:
+        col_back, _ = st.columns([1, 5])
+        if col_back.button("◀ Back"):
+            task.prev_stage()
+            st.rerun()
+            
+        st.markdown("### 🔍 Review & Polish")
+        
+        col_editor, col_issues = st.columns([2, 1])
+        
+        with col_issues:
+            if st.button("Run Revision Checks"):
+                task.run_revision()
+                st.rerun()
+            
+            if data.revision_passes:
+                for issue in data.revision_passes:
+                    color = "red" if issue.severity == "high" else "orange" if issue.severity == "medium" else "gray"
+                    st.markdown(f":{color}[**{issue.issue_type}**]: {issue.description} ({issue.location})")
+            else:
+                st.info("Run checks to see feedback.")
 
-# --------- Reading UI: create task ---------
+        with col_editor:
+            st.markdown("**Full Draft (Editable)**")
+            full_text = task.get_full_draft()
+            new_full = st.text_area("Full Essay", value=full_text, height=600)
+            
+            if st.button("Save Full Draft"):
+                st.warning("Saving full draft updates the display but may desync individual sections.")
 
-def create_reading_task_ui():
-    st.header("📚 Reading Assistant")
-
-    st.write("Paste multiple texts and read them interleaved, chunk by chunk.")
-
-    n = st.number_input(
-        "How many texts?",
-        min_value=1,
-        max_value=10,
-        value=2,
-        step=1,
-    )
-    texts: List[Dict[str, Any]] = []
-    for i in range(int(n)):
-        with st.expander(f"Text {i + 1}", expanded=(i == 0)):
-            title = st.text_input(
-                f"Title for text {i + 1}",
-                value=f"Text {i + 1}",
-                key=f"title_{i}",
-            )
-            content = st.text_area(
-                f"Content for text {i + 1}",
-                height=200,
-                key=f"text_{i}",
-            )
-            texts.append({
-                "id": f"text_{i + 1}",
-                "title": title,
-                "text": content,
-            })
-
-    seed = st.text_input("Seed (optional, for reproducible order)", value="")
-    shuffle_each = st.checkbox("Shuffle each round", value=True)
-
-    if st.button("Create Reading Task"):
-        manager: TaskManager = st.session_state.task_manager
-        seed_val = None
-        if seed:
-            seed_val = int(seed) if seed.isdigit() else seed
-
-        task = manager.create_task("reading", {
-            "texts": texts,
-            "seed": seed_val,
-            "shuffle_each_round": shuffle_each,
-        })
-
-        st.session_state.current_task_id = task.id
-        preview = manager.start_task(task.id)
-        st.success(f"Created reading task `{task.id}`")
-
-        render_ui_lines(preview)
-        with st.expander("Raw response (debug)", expanded=False):
-            st.json(preview)
-
-        # 🔽 Immediately show specialised "solve" UI for reading
-        st.markdown("---")
-        st.info("Start reading with interleaved chunks below:")
-        reading_controls()
-
-
-def reading_controls():
-    manager: TaskManager = st.session_state.task_manager
-    task_id = st.session_state.current_task_id
-    task = manager.get_task(task_id)
-    assert isinstance(task, ReadingAssistantTask)
-
-    status = task.get_reading_status()
-    st.subheader("Reading Status")
-    st.json(status)
-
-    if status["remaining"] <= 0:
-        st.info("No more chunks. Task is completed.")
+# --------- Reading UI Implementation ---------
+def render_reading_ui(task: ReadingAssistantTask):
+    st.markdown(f"### 📚 Reading Assistant")
+    
+    progress = task.get_progress()
+    cols = st.columns(len(progress))
+    colors = ["#74938B", "#6FCF97", "#F2C94C", "#5BA4E6"] 
+    
+    for i, p in enumerate(progress):
+        with cols[i]:
+            st.caption(f"{p['title']}")
+            st.markdown(f"""
+            <div style="background-color: #ddd; height: 10px; border-radius: 5px;">
+                <div style="background-color: {colors[i%len(colors)]}; width: {p['percent']*100}%; height: 100%; border-radius: 5px;"></div>
+            </div>
+            <div style="font-size: 0.8em; text-align: right;">{p['read']}/{p['total']}</div>
+            """, unsafe_allow_html=True)
+    
+    st.divider()
+    
+    chunk = task.get_current_chunk()
+    if not chunk:
+        st.info("No sources available.")
         return
 
-    if st.button("Get next chunk ▶"):
-        out = manager.advance_task(task_id)
-        if out.get("completed"):
-            st.success("All chunks delivered.")
-        else:
-            c = out["chunk"]
-            st.markdown(
-                f"**Chunk {out['chunk_number']} / {out['total_chunks']}**  \n"
-                f"Source: **{c['source_title']}**  "
-                f"(paragraph {c['paragraph_index']} / {c['total_paragraphs_for_source']})"
-            )
-            st.write(c["text"])
-            st.caption(f"Remaining chunks: {out['remaining']}")
+    if chunk['is_finished']:
+        st.success(f"Finished: {chunk['source_title']}")
+        st.info("Please switch text.")
+    else:
+        st.markdown(f"**Current Source:** {chunk['source_title']} (Para {chunk['para_num']}/{chunk['total_paras']})")
+        st.markdown(f"""
+        <div style="background-color: #f9f9f9; padding: 20px; border-radius: 10px; border-left: 5px solid #6FCF97;">
+            {chunk['text']}
+        </div>
+        """, unsafe_allow_html=True)
 
+    st.markdown("<br>", unsafe_allow_html=True)
 
-# --------- Task list + main layout ---------
-
-def main():
-    st.set_page_config(
-        page_title="Essay & Reading Assistant",
-        layout="wide",
-    )
-    st.title("📝 Essay & 📚 Reading Assistant – Test UI")
-    
-    setup_llm_from_sidebar()
-
-    manager: TaskManager = st.session_state.task_manager
-
-    col_task_list, col_main = st.columns([1, 3])
-
-    # Left: task list
-    with col_task_list:
-        st.subheader("Tasks")
-        tasks = manager.get_all_tasks()
-        if tasks:
-            for t in tasks:
-                label = f"{t['type']} – {t['id']} ({t['status']})"
-                if st.button(label, key=t["id"]):
-                    st.session_state.current_task_id = t["id"]
-        else:
-            st.info("No tasks yet.")
-
-        if st.session_state.current_task_id:
-            st.write(f"**Selected task:** `{st.session_state.current_task_id}`")
-            if st.button("Delete selected task 🗑"):
-                manager.delete_task(st.session_state.current_task_id)
-                st.session_state.current_task_id = None
-                st.success("Deleted task.")
-
-    # Right: main area
-    with col_main:
-        mode = st.radio(
-            "What do you want to do?",
-            ["Create Essay Task", "Create Reading Task", "Work on existing task"],
-        )
-
-        if mode == "Create Essay Task":
-            create_essay_task_ui()
-        elif mode == "Create Reading Task":
-            create_reading_task_ui()
-        else:
-            if not st.session_state.current_task_id:
-                st.info("Select a task on the left or create a new one.")
-            else:
-                task = manager.get_task(st.session_state.current_task_id)
-                if isinstance(task, EssayAssistantTask):
-                    essay_stage_controls()
-                elif isinstance(task, ReadingAssistantTask):
-                    reading_controls()
-                else:
-                    st.warning("Unknown task type.")
-
+    c1, c2 = st.columns(2)
+    if c1.button("Continue here ⬇️", use_container_width=True):
+        task.advance(mode='continue')
+        st.rerun()
+        
+    if c2.button("Switch text 🔀", use_container_width=True):
+        task.advance(mode='switch')
+        st.rerun()
 
 if __name__ == "__main__":
     main()
