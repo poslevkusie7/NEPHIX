@@ -138,11 +138,11 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
 
 class Task(ABC):
-    def __init__(self, params: Dict[str, Any]):
-        self.id = f"task_{uuid.uuid4().hex[:9]}"
+    def __init__(self, params: Dict[str, Any], task_id: Optional[str] = None, status: TaskStatus = TaskStatus.INITIALIZED):
+        self.id = task_id or f"task_{uuid.uuid4().hex[:9]}"
         self.type = self.__class__.__name__
         self.created_at = datetime.now()
-        self.status = TaskStatus.INITIALIZED
+        self.status = status
         self.params = params or {}
 
     @abstractmethod
@@ -157,9 +157,36 @@ class OutlineSection:
     guiding_question: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "word_count": self.word_count,
+            "guiding_question": self.guiding_question,
+            "id": self.id,
+        }
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "OutlineSection":
+        return OutlineSection(
+            title=data.get("title", ""),
+            word_count=int(data.get("word_count", 0)),
+            guiding_question=data.get("guiding_question", ""),
+            id=data.get("id") or str(uuid.uuid4())[:8],
+        )
+
 @dataclass
 class Outline:
     sections: List[OutlineSection] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"sections": [s.to_dict() for s in self.sections]}
+
+    @staticmethod
+    def from_dict(data: Optional[Dict[str, Any]]) -> Optional["Outline"]:
+        if not data:
+            return None
+        sections = [OutlineSection.from_dict(s) for s in data.get("sections", [])]
+        return Outline(sections=sections)
 
 @dataclass
 class EssaySection:
@@ -172,6 +199,31 @@ class EssaySection:
     tree_prompts: Dict[str, str] = field(default_factory=dict)
     id: str = ""
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "target_words": self.target_words,
+            "guiding_question": self.guiding_question,
+            "content": self.content,
+            "actual_words": self.actual_words,
+            "completed": self.completed,
+            "tree_prompts": self.tree_prompts,
+            "id": self.id,
+        }
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "EssaySection":
+        return EssaySection(
+            title=data.get("title", ""),
+            target_words=int(data.get("target_words", 0)),
+            guiding_question=data.get("guiding_question", ""),
+            content=data.get("content", ""),
+            actual_words=int(data.get("actual_words", 0)),
+            completed=bool(data.get("completed", False)),
+            tree_prompts=data.get("tree_prompts", {}) or {},
+            id=data.get("id", ""),
+        )
+
 @dataclass
 class RevisionIssue:
     issue_type: str
@@ -179,6 +231,25 @@ class RevisionIssue:
     location: str
     severity: str = "medium"
     suggestion: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "issue_type": self.issue_type,
+            "description": self.description,
+            "location": self.location,
+            "severity": self.severity,
+            "suggestion": self.suggestion,
+        }
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "RevisionIssue":
+        return RevisionIssue(
+            issue_type=data.get("issue_type", ""),
+            description=data.get("description", ""),
+            location=data.get("location", ""),
+            severity=data.get("severity", "medium"),
+            suggestion=data.get("suggestion"),
+        )
 
 @dataclass
 class EssayData:
@@ -192,11 +263,41 @@ class EssayData:
     sections: List[EssaySection] = field(default_factory=list)
     revision_passes: List[RevisionIssue] = field(default_factory=list)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "topic": self.topic,
+            "essay_type": self.essay_type,
+            "word_count": self.word_count,
+            "deadline": self.deadline.isoformat() if self.deadline else None,
+            "thesis": self.thesis,
+            "thesis_suggestions": list(self.thesis_suggestions),
+            "outline": self.outline.to_dict() if self.outline else None,
+            "sections": [s.to_dict() for s in self.sections],
+            "revision_passes": [i.to_dict() for i in self.revision_passes],
+        }
+
+    @staticmethod
+    def from_dict(data: Optional[Dict[str, Any]]) -> "EssayData":
+        data = data or {}
+        deadline = data.get("deadline")
+        parsed_deadline = datetime.fromisoformat(deadline) if deadline else None
+        return EssayData(
+            topic=data.get("topic", ""),
+            essay_type=data.get("essay_type", ""),
+            word_count=int(data.get("word_count", 0)),
+            deadline=parsed_deadline,
+            thesis=data.get("thesis", ""),
+            thesis_suggestions=data.get("thesis_suggestions", []) or [],
+            outline=Outline.from_dict(data.get("outline")),
+            sections=[EssaySection.from_dict(s) for s in data.get("sections", [])],
+            revision_passes=[RevisionIssue.from_dict(i) for i in data.get("revision_passes", [])],
+        )
+
 # ========== ESSAY STAGES ==========
 
 class EssayAssistantTask(Task):
-    def __init__(self, params: Dict[str, Any]):
-        super().__init__(params)
+    def __init__(self, params: Dict[str, Any], task_id: Optional[str] = None, status: TaskStatus = TaskStatus.INITIALIZED):
+        super().__init__(params, task_id=task_id, status=status)
         self.essay_data = EssayData()
         self.current_stage_idx = 0
         self.stage_names = ["Pick Ideas", "Organize", "Write", "Revise"]
@@ -316,6 +417,28 @@ class EssayAssistantTask(Task):
     def get_full_draft(self) -> str:
         return "\n\n".join([s.content for s in self.essay_data.sections])
 
+    def to_state(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "task_type": "essay",
+            "params": self.params,
+            "status": self.status.value,
+            "current_stage_idx": self.current_stage_idx,
+            "essay_data": self.essay_data.to_dict(),
+        }
+
+    @staticmethod
+    def from_state(state: Dict[str, Any]) -> "EssayAssistantTask":
+        status = TaskStatus(state.get("status", TaskStatus.INITIALIZED.value))
+        task = EssayAssistantTask(
+            state.get("params", {}),
+            task_id=state.get("id"),
+            status=status,
+        )
+        task.current_stage_idx = int(state.get("current_stage_idx", 0))
+        task.essay_data = EssayData.from_dict(state.get("essay_data", {}))
+        return task
+
 # ========== READING ASSISTANT TASK ==========
 
 @dataclass
@@ -325,9 +448,26 @@ class ReadingSource:
     paragraphs: List[str]
     current_index: int = 0 
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "paragraphs": list(self.paragraphs),
+            "current_index": self.current_index,
+        }
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "ReadingSource":
+        return ReadingSource(
+            id=data.get("id", ""),
+            title=data.get("title", ""),
+            paragraphs=data.get("paragraphs", []) or [],
+            current_index=int(data.get("current_index", 0)),
+        )
+
 class ReadingAssistantTask(Task):
-    def __init__(self, params: Dict[str, Any]):
-        super().__init__(params)
+    def __init__(self, params: Dict[str, Any], task_id: Optional[str] = None, status: TaskStatus = TaskStatus.INITIALIZED):
+        super().__init__(params, task_id=task_id, status=status)
         self.sources: List[ReadingSource] = []
         self.current_source_idx: Optional[int] = None
 
@@ -386,6 +526,37 @@ class ReadingAssistantTask(Task):
             }
             for s in self.sources
         ]
+
+    def to_state(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "task_type": "reading",
+            "params": self.params,
+            "status": self.status.value,
+            "current_source_idx": self.current_source_idx,
+            "sources": [s.to_dict() for s in self.sources],
+        }
+
+    @staticmethod
+    def from_state(state: Dict[str, Any]) -> "ReadingAssistantTask":
+        status = TaskStatus(state.get("status", TaskStatus.INITIALIZED.value))
+        task = ReadingAssistantTask(
+            state.get("params", {}),
+            task_id=state.get("id"),
+            status=status,
+        )
+        task.current_source_idx = state.get("current_source_idx")
+        task.sources = [ReadingSource.from_dict(s) for s in state.get("sources", [])]
+        return task
+
+
+def task_from_state(state: Dict[str, Any]) -> Task:
+    task_type = state.get("task_type")
+    if task_type == "essay":
+        return EssayAssistantTask.from_state(state)
+    if task_type == "reading":
+        return ReadingAssistantTask.from_state(state)
+    raise ValueError(f"Unknown task_type: {task_type}")
 
 # ========== TASK MANAGER ==========
 
