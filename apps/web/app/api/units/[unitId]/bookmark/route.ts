@@ -4,15 +4,16 @@ import { bookmarkUnitRequestSchema } from '@nephix/contracts';
 import { requireAuthenticatedUser } from '@/lib/auth/require-user';
 import { parseJsonBody } from '@/lib/http';
 
-export async function POST(request: Request, context: { params: { unitId: string } }) {
+export async function POST(request: Request, context: { params: Promise<{ unitId: string }> }) {
   const user = await requireAuthenticatedUser(request);
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
+    const params = await context.params;
     const payload = await parseJsonBody(request, bookmarkUnitRequestSchema);
-    const state = await setUnitBookmarkForUser(user.id, context.params.unitId, payload);
+    const state = await setUnitBookmarkForUser(user.id, params.unitId, payload);
     return NextResponse.json({ state });
   } catch (error) {
     if (error instanceof NotFoundError) {

@@ -7,14 +7,15 @@ import {
 } from '@nephix/db';
 import { requireAuthenticatedUser } from '@/lib/auth/require-user';
 
-export async function POST(request: Request, context: { params: { unitId: string } }) {
+export async function POST(request: Request, context: { params: Promise<{ unitId: string }> }) {
   const user = await requireAuthenticatedUser(request);
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
-    const result = await completeUnitForUser(user.id, context.params.unitId);
+    const params = await context.params;
+    const result = await completeUnitForUser(user.id, params.unitId);
     return NextResponse.json({ result });
   } catch (error) {
     if (error instanceof NotFoundError) {

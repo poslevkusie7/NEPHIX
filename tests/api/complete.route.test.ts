@@ -38,7 +38,7 @@ describe('POST /api/units/:unitId/complete', () => {
 
     const { POST } = await loadRoute();
     const response = await POST(new Request('http://localhost/api/units/u1/complete'), {
-      params: { unitId: 'u1' },
+      params: Promise.resolve({ unitId: 'u1' }),
     });
 
     expect(response.status).toBe(400);
