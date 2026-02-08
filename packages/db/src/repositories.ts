@@ -589,7 +589,7 @@ export async function completeUnitForUser(
       (candidate) => candidate.orderIndex > unit.orderIndex && !completedSet.has(candidate.id),
     );
 
-    let nextAssignmentStatus = UserAssignmentStatus.COMPLETED;
+    let nextAssignmentStatus: UserAssignmentStatus = UserAssignmentStatus.COMPLETED;
     if (nextUnit) {
       nextAssignmentStatus = UserAssignmentStatus.IN_PROGRESS;
       await tx.userUnitState.upsert({
