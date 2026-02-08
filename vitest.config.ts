@@ -11,6 +11,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'apps/web'),
+      '@nephix/contracts': path.resolve(__dirname, 'packages/contracts/src/index.ts'),
+      '@nephix/domain': path.resolve(__dirname, 'packages/domain/src/index.ts'),
+      '@nephix/db': path.resolve(__dirname, 'packages/db/src/index.ts'),
+      '@nephix/ui': path.resolve(__dirname, 'packages/ui/src/index.ts'),
     },
   },
 });
