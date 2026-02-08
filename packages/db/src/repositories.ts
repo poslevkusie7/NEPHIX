@@ -501,7 +501,7 @@ export async function completeUnitForUser(
     });
 
     if (!assignmentState) {
-      assignmentState = await tx.userAssignmentState.create({
+      const createdState = await tx.userAssignmentState.create({
         data: {
           userId,
           assignmentId: unit.assignmentId,
@@ -510,15 +510,21 @@ export async function completeUnitForUser(
           lastOpenedAt: new Date(),
         },
       });
+      assignmentState = createdState;
+
+      const currentUnitId = createdState.currentUnitId;
       await tx.userUnitState.createMany({
         data: unit.assignment.units.map((entry) => ({
           userId,
           unitId: entry.id,
-          status:
-            entry.id === assignmentState.currentUnitId ? UserUnitStatus.ACTIVE : UserUnitStatus.UNREAD,
+          status: entry.id === currentUnitId ? UserUnitStatus.ACTIVE : UserUnitStatus.UNREAD,
         })),
         skipDuplicates: true,
       });
+    }
+
+    if (!assignmentState) {
+      throw new UnauthorizedTransitionError('Assignment state is not initialized.');
     }
 
     if (assignmentState.currentUnitId !== unitId) {

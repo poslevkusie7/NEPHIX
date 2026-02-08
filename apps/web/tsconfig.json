@@ -5,6 +5,8 @@
     "paths": {
       "@/*": ["./*"]
     },
+    "strict": true,
+    "incremental": true,
     "jsx": "preserve",
     "plugins": [
       {
