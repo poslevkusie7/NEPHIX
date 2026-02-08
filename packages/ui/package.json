@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@nephix/contracts": "workspace:*",
     "react": "19.0.0"
   },
   "devDependencies": {
