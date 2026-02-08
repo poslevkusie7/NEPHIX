@@ -1,20 +1,26 @@
+import type {
+  AssignmentTaskType as PrismaAssignmentTaskType,
+  UnitType as PrismaUnitTypeValue,
+  UserAssignmentStatus as PrismaUserAssignmentStatus,
+  UserUnitStatus as PrismaUserUnitStatus,
+} from '@prisma/client';
+import type { AssignmentStatus, TaskType, UnitStatus, UnitType } from '@nephix/contracts';
 import {
   AssignmentTaskType,
   UnitType as PrismaUnitType,
   UserAssignmentStatus,
   UserUnitStatus,
-} from '@prisma/client';
-import type { AssignmentStatus, TaskType, UnitStatus, UnitType } from '@nephix/contracts';
+} from './prisma-runtime';
 
-export function toPrismaTaskType(value: TaskType): AssignmentTaskType {
+export function toPrismaTaskType(value: TaskType): PrismaAssignmentTaskType {
   return value === 'reading' ? AssignmentTaskType.READING : AssignmentTaskType.ESSAY;
 }
 
-export function fromPrismaTaskType(value: AssignmentTaskType): TaskType {
+export function fromPrismaTaskType(value: PrismaAssignmentTaskType): TaskType {
   return value === AssignmentTaskType.READING ? 'reading' : 'essay';
 }
 
-export function toPrismaUnitType(value: UnitType): PrismaUnitType {
+export function toPrismaUnitType(value: UnitType): PrismaUnitTypeValue {
   switch (value) {
     case 'reading':
       return PrismaUnitType.READING;
@@ -29,7 +35,7 @@ export function toPrismaUnitType(value: UnitType): PrismaUnitType {
   }
 }
 
-export function fromPrismaUnitType(value: PrismaUnitType): UnitType {
+export function fromPrismaUnitType(value: PrismaUnitTypeValue): UnitType {
   switch (value) {
     case PrismaUnitType.READING:
       return 'reading';
@@ -44,7 +50,7 @@ export function fromPrismaUnitType(value: PrismaUnitType): UnitType {
   }
 }
 
-export function fromPrismaAssignmentStatus(value: UserAssignmentStatus): AssignmentStatus {
+export function fromPrismaAssignmentStatus(value: PrismaUserAssignmentStatus): AssignmentStatus {
   switch (value) {
     case UserAssignmentStatus.NOT_STARTED:
       return 'not_started';
@@ -55,7 +61,7 @@ export function fromPrismaAssignmentStatus(value: UserAssignmentStatus): Assignm
   }
 }
 
-export function toPrismaUnitStatus(value: UnitStatus): UserUnitStatus {
+export function toPrismaUnitStatus(value: UnitStatus): PrismaUserUnitStatus {
   switch (value) {
     case 'unread':
       return UserUnitStatus.UNREAD;
@@ -66,7 +72,7 @@ export function toPrismaUnitStatus(value: UnitStatus): UserUnitStatus {
   }
 }
 
-export function fromPrismaUnitStatus(value: UserUnitStatus): UnitStatus {
+export function fromPrismaUnitStatus(value: PrismaUserUnitStatus): UnitStatus {
   switch (value) {
     case UserUnitStatus.UNREAD:
       return 'unread';

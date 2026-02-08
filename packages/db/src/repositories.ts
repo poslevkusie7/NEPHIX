@@ -1,8 +1,7 @@
-import {
+import type {
   Prisma,
-  UnitType as PrismaUnitType,
-  UserAssignmentStatus,
-  UserUnitStatus,
+  UserAssignmentStatus as PrismaUserAssignmentStatus,
+  UserUnitStatus as PrismaUserUnitStatus,
 } from '@prisma/client';
 import type {
   AssignmentDetailDTO,
@@ -23,6 +22,11 @@ import {
   fromPrismaUnitType,
   toPrismaUnitStatus,
 } from './mappers';
+import {
+  UnitType as PrismaUnitType,
+  UserAssignmentStatus,
+  UserUnitStatus,
+} from './prisma-runtime';
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -60,7 +64,7 @@ function mapAuthUser(user: { id: string; email: string; createdAt: Date }): Auth
 
 function mapUnitState(state: {
   unitId: string;
-  status: UserUnitStatus;
+  status: PrismaUserUnitStatus;
   bookmarked: boolean;
   content: Prisma.JsonValue | null;
   position: Prisma.JsonValue | null;
@@ -589,7 +593,7 @@ export async function completeUnitForUser(
       (candidate) => candidate.orderIndex > unit.orderIndex && !completedSet.has(candidate.id),
     );
 
-    let nextAssignmentStatus: UserAssignmentStatus = UserAssignmentStatus.COMPLETED;
+    let nextAssignmentStatus: PrismaUserAssignmentStatus = UserAssignmentStatus.COMPLETED;
     if (nextUnit) {
       nextAssignmentStatus = UserAssignmentStatus.IN_PROGRESS;
       await tx.userUnitState.upsert({
