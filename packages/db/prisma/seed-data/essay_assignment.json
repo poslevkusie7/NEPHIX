@@ -1,0 +1,129 @@
+{
+  "seedKey": "essay-martin-eden",
+  "title": "Essay: Motives of Martin Eden",
+  "subject": "Literature",
+  "taskType": "essay",
+  "deadlineISO": "2026-02-22T23:59:00.000Z",
+  "active": true,
+  "units": [
+    {
+      "orderIndex": 0,
+      "unitType": "thesis",
+      "title": "Pick Ideas (Thesis)",
+      "payload": {
+        "topic": "The motives of Martin Eden",
+        "essayType": "opinion",
+        "wordCount": 1000,
+        "deadlineISO": "2026-02-22T23:59:00.000Z"
+      }
+    },
+    {
+      "orderIndex": 1,
+      "unitType": "outline",
+      "title": "Organize (Outline)",
+      "payload": {
+        "sections": [
+          {
+            "id": "intro",
+            "title": "Introduction",
+            "guidingQuestion": "How will you introduce Martin Eden and the central argument?",
+            "targetWords": 150
+          },
+          {
+            "id": "body-1",
+            "title": "Body Paragraph 1",
+            "guidingQuestion": "What motive initially drives Eden's growth?",
+            "targetWords": 250
+          },
+          {
+            "id": "body-2",
+            "title": "Body Paragraph 2",
+            "guidingQuestion": "How does social recognition reshape his ambition?",
+            "targetWords": 250
+          },
+          {
+            "id": "body-3",
+            "title": "Body Paragraph 3",
+            "guidingQuestion": "How do alienation and class conflict influence his choices?",
+            "targetWords": 200
+          },
+          {
+            "id": "conclusion",
+            "title": "Conclusion",
+            "guidingQuestion": "How does your argument explain the trajectory of the character?",
+            "targetWords": 150
+          }
+        ]
+      }
+    },
+    {
+      "orderIndex": 2,
+      "unitType": "writing",
+      "title": "Write: Introduction",
+      "targetWords": 150,
+      "payload": {
+        "sectionId": "intro",
+        "sectionTitle": "Introduction",
+        "guidingQuestion": "How will you introduce the problem and thesis?",
+        "targetWords": 150
+      }
+    },
+    {
+      "orderIndex": 3,
+      "unitType": "writing",
+      "title": "Write: Body Paragraph 1",
+      "targetWords": 250,
+      "payload": {
+        "sectionId": "body-1",
+        "sectionTitle": "Body Paragraph 1",
+        "guidingQuestion": "Develop the first argument with evidence.",
+        "targetWords": 250
+      }
+    },
+    {
+      "orderIndex": 4,
+      "unitType": "writing",
+      "title": "Write: Body Paragraph 2",
+      "targetWords": 250,
+      "payload": {
+        "sectionId": "body-2",
+        "sectionTitle": "Body Paragraph 2",
+        "guidingQuestion": "Explain how social approval changes Eden's motives.",
+        "targetWords": 250
+      }
+    },
+    {
+      "orderIndex": 5,
+      "unitType": "writing",
+      "title": "Write: Body Paragraph 3",
+      "targetWords": 200,
+      "payload": {
+        "sectionId": "body-3",
+        "sectionTitle": "Body Paragraph 3",
+        "guidingQuestion": "Analyze tension between identity and class boundaries.",
+        "targetWords": 200
+      }
+    },
+    {
+      "orderIndex": 6,
+      "unitType": "writing",
+      "title": "Write: Conclusion",
+      "targetWords": 150,
+      "payload": {
+        "sectionId": "conclusion",
+        "sectionTitle": "Conclusion",
+        "guidingQuestion": "Close the argument and reconnect to thesis.",
+        "targetWords": 150
+      }
+    },
+    {
+      "orderIndex": 7,
+      "unitType": "revise",
+      "title": "Revise and Polish",
+      "payload": {
+        "focuses": ["clarity", "structure", "argument", "word_balance"],
+        "targetWordCount": 1000
+      }
+    }
+  ]
+}

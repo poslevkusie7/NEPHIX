@@ -1,0 +1,46 @@
+{
+  "seedKey": "reading-social-contract",
+  "title": "Reading: Social Contract Foundations",
+  "subject": "Political Philosophy",
+  "taskType": "reading",
+  "deadlineISO": "2026-02-18T23:59:00.000Z",
+  "active": true,
+  "units": [
+    {
+      "orderIndex": 0,
+      "unitType": "reading",
+      "title": "Fragment 1: Why Societies Need Rules",
+      "payload": {
+        "text": "Political communities emerge when individuals accept shared rules that limit some freedom in exchange for stability. Without shared constraints, conflicts over resources and status escalate quickly.",
+        "fragmentLabel": "1/4"
+      }
+    },
+    {
+      "orderIndex": 1,
+      "unitType": "reading",
+      "title": "Fragment 2: Consent and Legitimacy",
+      "payload": {
+        "text": "The social contract tradition argues that political authority is legitimate only when people can see it as grounded in consent, either explicit or tacit. This idea makes legitimacy a moral claim, not just a question of force.",
+        "fragmentLabel": "2/4"
+      }
+    },
+    {
+      "orderIndex": 2,
+      "unitType": "reading",
+      "title": "Fragment 3: Limits of State Power",
+      "payload": {
+        "text": "Even a government created by agreement has limits. If institutions consistently violate basic rights or destroy public trust, citizens may reconsider whether the contract remains valid.",
+        "fragmentLabel": "3/4"
+      }
+    },
+    {
+      "orderIndex": 3,
+      "unitType": "reading",
+      "title": "Fragment 4: Modern Relevance",
+      "payload": {
+        "text": "Contemporary debates about surveillance, economic inequality, and civic participation often revisit contract language. The central question stays the same: what obligations do citizens and institutions owe each other?",
+        "fragmentLabel": "4/4"
+      }
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AssignmentTaskType {
+  READING
+  ESSAY
+}
+
+enum UnitType {
+  READING
+  THESIS
+  OUTLINE
+  WRITING
+  REVISE
+}
+
+enum UserAssignmentStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum UserUnitStatus {
+  UNREAD
+  ACTIVE
+  COMPLETED
+}
+
+model User {
+  id               String                @id @default(cuid())
+  email            String                @unique
+  passwordHash     String
+  createdAt        DateTime              @default(now())
+  refreshTokens    RefreshToken[]
+  assignmentStates UserAssignmentState[]
+  unitStates       UserUnitState[]
+}
+
+model RefreshToken {
+  id            String   @id @default(cuid())
+  userId        String
+  tokenHash     String   @unique
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  rotatedFromId String?
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Assignment {
+  id              String                @id @default(cuid())
+  title           String
+  subject         String
+  taskType        AssignmentTaskType
+  deadline        DateTime
+  seedKey         String                @unique
+  active          Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  units           AssignmentUnit[]
+  assignmentState UserAssignmentState[]
+}
+
+model AssignmentUnit {
+  id          String     @id @default(cuid())
+  assignmentId String
+  orderIndex  Int
+  unitType    UnitType
+  title       String
+  payload     Json
+  targetWords Int?
+  createdAt   DateTime   @default(now())
+
+  assignment Assignment    @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  unitStates UserUnitState[]
+
+  @@unique([assignmentId, orderIndex])
+  @@index([assignmentId])
+}
+
+model UserAssignmentState {
+  id           String               @id @default(cuid())
+  userId       String
+  assignmentId String
+  currentUnitId String?
+  status       UserAssignmentStatus @default(NOT_STARTED)
+  lastOpenedAt DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, assignmentId])
+  @@index([assignmentId])
+}
+
+model UserUnitState {
+  id         String         @id @default(cuid())
+  userId     String
+  unitId     String
+  status     UserUnitStatus @default(UNREAD)
+  bookmarked Boolean        @default(false)
+  content    Json?
+  position   Json?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  user User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unit AssignmentUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, unitId])
+  @@index([unitId])
+}
