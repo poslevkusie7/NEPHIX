@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@nephix/contracts": "workspace:*",
-    "react": "19.0.0"
+    "react": "19.0.1"
   },
   "devDependencies": {
     "@types/react": "19.0.2",
