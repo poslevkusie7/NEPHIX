@@ -42,7 +42,7 @@ function jsonToRecord(value: Prisma.JsonValue | null): Record<string, unknown> |
 function mergeJsonRecord(
   existing: Prisma.JsonValue | null,
   next: Record<string, unknown> | undefined,
-): Prisma.InputJsonValue | null | undefined {
+): Prisma.InputJsonValue | undefined {
   if (!next) {
     return undefined;
   }
