@@ -31,6 +31,7 @@ Copy `.env.example` to `.env` and set values:
 - `JWT_SECRET`
 - `ACCESS_TOKEN_TTL_MINUTES` (optional)
 - `REFRESH_TOKEN_TTL_DAYS` (optional)
+- `PASSWORD_RESET_TOKEN_TTL_MINUTES` (optional)
 
 ## Setup
 
@@ -50,6 +51,8 @@ App runs at `http://localhost:3000`.
 - `POST /api/auth/login`
 - `POST /api/auth/refresh`
 - `POST /api/auth/logout`
+- `POST /api/auth/forgot-password`
+- `POST /api/auth/reset-password`
 - `GET /api/me`
 - `GET /api/feed`
 - `GET /api/assignments/:id`

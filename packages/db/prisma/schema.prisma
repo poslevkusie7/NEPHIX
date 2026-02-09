@@ -39,6 +39,7 @@ model User {
   passwordHash     String
   createdAt        DateTime              @default(now())
   refreshTokens    RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
   assignmentStates UserAssignmentState[]
   unitStates       UserUnitState[]
 }
@@ -51,6 +52,19 @@ model RefreshToken {
   revokedAt     DateTime?
   rotatedFromId String?
   createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

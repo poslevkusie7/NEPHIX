@@ -3,8 +3,11 @@
 import { useRouter } from 'next/navigation';
 import {
   FormEvent,
+  WheelEvent as ReactWheelEvent,
+  forwardRef,
   PointerEvent as ReactPointerEvent,
   UIEvent as ReactUIEvent,
+  useImperativeHandle,
   useCallback,
   useEffect,
   useMemo,
@@ -38,6 +41,10 @@ type SwipeHandlers = {
   onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerUp: () => void;
   onPointerCancel: () => void;
+};
+
+type UnitWorkspaceHandle = {
+  persist: () => Promise<boolean>;
 };
 
 function useSwipeNavigation(callbacks: {
@@ -110,6 +117,8 @@ export function StudyClient() {
   const [viewUnitId, setViewUnitId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const workspaceRef = useRef<UnitWorkspaceHandle | null>(null);
+  const navigationInFlightRef = useRef(false);
 
   const apiFetch = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -229,6 +238,20 @@ export function StudyClient() {
   const currentUnit = viewUnitIndex >= 0 ? units[viewUnitIndex] : null;
   const currentUnitState = currentUnit ? stateByUnit.get(currentUnit.id) : undefined;
 
+  async function persistCurrentUnitBeforeNavigation(): Promise<boolean> {
+    if (!workspaceRef.current) {
+      return true;
+    }
+
+    const persisted = await workspaceRef.current.persist();
+    if (!persisted) {
+      setError('Could not save your current unit. Please try again.');
+      return false;
+    }
+
+    return true;
+  }
+
   function canOpenUnit(index: number): boolean {
     if (!assignmentState) {
       return false;
@@ -248,7 +271,11 @@ export function StudyClient() {
     return true;
   }
 
-  function moveAssignment(delta: number) {
+  async function moveAssignment(delta: number) {
+    if (navigationInFlightRef.current) {
+      return;
+    }
+
     if (assignmentIndex < 0) {
       return;
     }
@@ -258,11 +285,26 @@ export function StudyClient() {
       return;
     }
 
-    setCurrentAssignmentId(feed[nextIndex].id);
-    setViewUnitId(null);
+    navigationInFlightRef.current = true;
+    try {
+      const canContinue = await persistCurrentUnitBeforeNavigation();
+      if (!canContinue) {
+        return;
+      }
+
+      setError(null);
+      setCurrentAssignmentId(feed[nextIndex].id);
+      setViewUnitId(null);
+    } finally {
+      navigationInFlightRef.current = false;
+    }
   }
 
-  function moveUnit(delta: number) {
+  async function moveUnit(delta: number) {
+    if (navigationInFlightRef.current) {
+      return;
+    }
+
     if (!currentUnit || viewUnitIndex < 0) {
       return;
     }
@@ -276,7 +318,18 @@ export function StudyClient() {
       return;
     }
 
-    setViewUnitId(units[targetIndex].id);
+    navigationInFlightRef.current = true;
+    try {
+      const canContinue = await persistCurrentUnitBeforeNavigation();
+      if (!canContinue) {
+        return;
+      }
+
+      setError(null);
+      setViewUnitId(units[targetIndex].id);
+    } finally {
+      navigationInFlightRef.current = false;
+    }
   }
 
   async function patchUnitState(unitId: string, payload: PatchUnitStateRequest): Promise<void> {
@@ -350,6 +403,10 @@ export function StudyClient() {
   }
 
   async function completeUnit() {
+    if (navigationInFlightRef.current) {
+      return;
+    }
+
     if (!currentUnit) {
       return;
     }
@@ -359,18 +416,30 @@ export function StudyClient() {
       return;
     }
 
-    const response = await apiFetch(`/api/units/${currentUnit.id}/complete`, {
-      method: 'POST',
-    });
+    navigationInFlightRef.current = true;
 
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as { error?: string } | null;
-      setError(body?.error ?? 'Failed to complete unit.');
-      return;
+    try {
+      const canContinue = await persistCurrentUnitBeforeNavigation();
+      if (!canContinue) {
+        return;
+      }
+
+      const response = await apiFetch(`/api/units/${currentUnit.id}/complete`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        setError(body?.error ?? 'Failed to complete unit.');
+        return;
+      }
+
+      setError(null);
+      setViewUnitId(null);
+      await refreshCurrentAssignment();
+    } finally {
+      navigationInFlightRef.current = false;
     }
-
-    setViewUnitId(null);
-    await refreshCurrentAssignment();
   }
 
   async function runRevisionChecks(): Promise<RevisionIssue[]> {
@@ -394,11 +463,36 @@ export function StudyClient() {
   }
 
   const swipeHandlers = useSwipeNavigation({
-    onSwipeLeft: () => moveUnit(1),
-    onSwipeRight: () => moveUnit(-1),
-    onSwipeUp: () => moveAssignment(1),
-    onSwipeDown: () => moveAssignment(-1),
+    onSwipeLeft: () => {
+      void moveUnit(1);
+    },
+    onSwipeRight: () => {
+      void moveUnit(-1);
+    },
+    onSwipeUp: () => {
+      void moveAssignment(1);
+    },
+    onSwipeDown: () => {
+      void moveAssignment(-1);
+    },
   });
+
+  function onFeedWheel(event: ReactWheelEvent<HTMLElement>) {
+    const absX = Math.abs(event.deltaX);
+    const absY = Math.abs(event.deltaY);
+    const threshold = 45;
+
+    if (absY > absX && absY > threshold) {
+      event.preventDefault();
+      void moveAssignment(event.deltaY > 0 ? 1 : -1);
+      return;
+    }
+
+    if (absX > absY && absX > threshold) {
+      event.preventDefault();
+      void moveUnit(event.deltaX > 0 ? 1 : -1);
+    }
+  }
 
   if (loading) {
     return (
@@ -434,128 +528,91 @@ export function StudyClient() {
         </p>
       ) : null}
 
-      <section className="row mobile-stack" style={{ alignItems: 'stretch' }}>
-        <aside className="panel" style={{ width: 330, minHeight: 540, padding: 14 }}>
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 style={{ margin: 0, fontSize: 18 }}>Assignments</h2>
-            <span className="muted" style={{ fontSize: 13 }}>
-              Deadline-first
-            </span>
-          </div>
-
-          <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
-            {feed.length === 0 ? <p className="muted">No assignments available.</p> : null}
-            {feed.map((item) => {
-              const active = item.id === currentAssignmentId;
-              const progressPercent = item.totalUnits > 0 ? (item.completedUnits / item.totalUnits) * 100 : 0;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    setCurrentAssignmentId(item.id);
-                    setViewUnitId(null);
-                  }}
-                  style={{
-                    textAlign: 'left',
-                    borderColor: active ? '#0f766e' : '#dbe3ec',
-                    background: active ? '#ecfeff' : 'white',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <strong>{item.title}</strong>
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      {new Date(item.deadlineISO).toLocaleDateString()}
-                    </span>
-                  </div>
-                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-                    {item.subject}
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 8,
-                      height: 8,
-                      borderRadius: 999,
-                      background: '#e2e8f0',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${progressPercent}%`,
-                        background: '#0f766e',
-                        height: '100%',
-                      }}
-                    />
-                  </div>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    {item.completedUnits}/{item.totalUnits} completed
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="row" style={{ marginTop: 12 }}>
-            <button type="button" className="btn" onClick={() => moveAssignment(-1)} style={{ flex: 1 }}>
-              Prev Assignment
-            </button>
-            <button type="button" className="btn" onClick={() => moveAssignment(1)} style={{ flex: 1 }}>
-              Next Assignment
-            </button>
-          </div>
-        </aside>
-
-        <section className="panel" style={{ flex: 1, padding: 16 }} {...swipeHandlers}>
-          {assignment && assignmentState && currentUnit ? (
-            <>
-              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h2 style={{ margin: 0 }}>{assignment.title}</h2>
-                  <p className="muted" style={{ margin: '4px 0 0' }}>
-                    Unit {viewUnitIndex + 1}/{units.length} • {currentUnit.title}
-                  </p>
-                </div>
-                <UnitStatusBadge status={currentUnitState?.status ?? 'unread'} />
+      <section
+        className="panel"
+        style={{ padding: 16, minHeight: 600 }}
+        {...swipeHandlers}
+        onWheel={onFeedWheel}
+      >
+        {assignment && assignmentState && currentUnit ? (
+          <>
+            <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                  Assignment {assignmentIndex + 1}/{feed.length} • Swipe up/down for next assignment
+                </p>
+                <h2 style={{ margin: '4px 0 0' }}>{assignment.title}</h2>
+                <p className="muted" style={{ margin: '4px 0 0' }}>
+                  {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
+                </p>
               </div>
+              <UnitStatusBadge status={currentUnitState?.status ?? 'unread'} />
+            </div>
 
-              <div className="row" style={{ marginTop: 10 }}>
-                <button type="button" className="btn" onClick={() => moveUnit(-1)}>
-                  Prev Unit
-                </button>
-                <button type="button" className="btn" onClick={() => moveUnit(1)}>
-                  Next Unit
-                </button>
-                <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
-                  {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={completeUnit}
-                  disabled={currentUnit.id !== activeUnitId}
-                >
-                  Mark Complete
-                </button>
-              </div>
+            <div
+              style={{
+                marginTop: 10,
+                height: 8,
+                borderRadius: 999,
+                background: '#e2e8f0',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  width: `${units.length > 0 ? ((activeUnitIndex + 1) / units.length) * 100 : 0}%`,
+                  background: '#0f766e',
+                  height: '100%',
+                }}
+              />
+            </div>
 
-              <div style={{ marginTop: 14 }}>
-                <UnitWorkspace
-                  unit={currentUnit}
-                  unitState={currentUnitState}
-                  units={units}
-                  unitStateMap={stateByUnit}
-                  isActive={currentUnit.id === activeUnitId}
-                  onPatch={patchUnitState}
-                  onRevisionCheck={runRevisionChecks}
-                />
-              </div>
-            </>
-          ) : (
-            <p className="muted">Choose an assignment to begin.</p>
-          )}
-        </section>
+            <div className="row mobile-stack" style={{ marginTop: 12 }}>
+              <button type="button" className="btn" onClick={() => void moveAssignment(-1)}>
+                Prev Assignment
+              </button>
+              <button type="button" className="btn" onClick={() => void moveAssignment(1)}>
+                Next Assignment
+              </button>
+              <button type="button" className="btn" onClick={() => void moveUnit(-1)}>
+                Prev Unit
+              </button>
+              <button type="button" className="btn" onClick={() => void moveUnit(1)}>
+                Next Unit
+              </button>
+              <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
+                {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={completeUnit}
+                disabled={currentUnit.id !== activeUnitId}
+              >
+                Mark Complete
+              </button>
+            </div>
+
+            <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
+              Unit {viewUnitIndex + 1}/{units.length} • Swipe left/right for next unit
+            </p>
+
+            <div style={{ marginTop: 14 }}>
+              <UnitWorkspace
+                ref={workspaceRef}
+                unit={currentUnit}
+                unitState={currentUnitState}
+                units={units}
+                unitStateMap={stateByUnit}
+                isActive={currentUnit.id === activeUnitId}
+                onPatch={patchUnitState}
+                onRevisionCheck={runRevisionChecks}
+              />
+            </div>
+          </>
+        ) : (
+          <p className="muted">No active assignment in the feed yet.</p>
+        )}
       </section>
     </main>
   );
@@ -571,7 +628,7 @@ type UnitWorkspaceProps = {
   onRevisionCheck: () => Promise<RevisionIssue[]>;
 };
 
-function UnitWorkspace({
+const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(function UnitWorkspace({
   unit,
   unitState,
   units,
@@ -579,11 +636,9 @@ function UnitWorkspace({
   isActive,
   onPatch,
   onRevisionCheck,
-}: UnitWorkspaceProps) {
+}, ref) {
   const [content, setContent] = useState<Record<string, unknown>>({});
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const initializedRef = useRef(false);
-  const readingScrollSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   const readingContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -605,34 +660,8 @@ function UnitWorkspace({
       }
     }
 
-    initializedRef.current = false;
     setSaveState('idle');
   }, [unit.id, unit.unitType, unit.payload, unitState?.updatedAtISO, unitState?.content]);
-
-  useEffect(() => {
-    if (unit.unitType === 'reading') {
-      return;
-    }
-
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      return;
-    }
-
-    setSaveState('saving');
-
-    const timeout = setTimeout(() => {
-      onPatch(unit.id, { content })
-        .then(() => {
-          setSaveState('saved');
-        })
-        .catch(() => {
-          setSaveState('error');
-        });
-    }, 650);
-
-    return () => clearTimeout(timeout);
-  }, [content, onPatch, unit.id, unit.unitType]);
 
   useEffect(() => {
     if (unit.unitType !== 'reading') {
@@ -646,14 +675,6 @@ function UnitWorkspace({
       readingContainerRef.current.scrollTop = scrollTop;
     }
   }, [unit.unitType, unit.id, unitState?.position]);
-
-  useEffect(() => {
-    return () => {
-      if (readingScrollSaveRef.current) {
-        clearTimeout(readingScrollSaveRef.current);
-      }
-    };
-  }, []);
 
   const writingSections = useMemo(() => {
     return units
@@ -671,14 +692,47 @@ function UnitWorkspace({
   }, [units, unitStateMap]);
 
   function updateContent(patch: Record<string, unknown>) {
+    setSaveState('dirty');
     setContent((prev) => ({ ...prev, ...patch }));
   }
 
+  const persist = useCallback(async () => {
+    if (!isActive) {
+      return true;
+    }
+
+    setSaveState('saving');
+
+    try {
+      if (unit.unitType === 'reading') {
+        const scrollTop = readingContainerRef.current?.scrollTop ?? 0;
+        await onPatch(unit.id, { position: { scrollTop } });
+      } else {
+        await onPatch(unit.id, { content });
+      }
+      setSaveState('saved');
+      return true;
+    } catch {
+      setSaveState('error');
+      return false;
+    }
+  }, [content, isActive, onPatch, unit.id, unit.unitType]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      persist,
+    }),
+    [persist],
+  );
+
   const saveLabel =
     saveState === 'saving'
-      ? 'Autosaving...'
+      ? 'Saving...'
       : saveState === 'saved'
-        ? 'All changes saved'
+        ? 'Saved on navigation'
+        : saveState === 'dirty'
+          ? 'Unsaved changes. Move to next/prev to save.'
         : saveState === 'error'
           ? 'Save failed'
           : '';
@@ -690,14 +744,9 @@ function UnitWorkspace({
       if (!isActive) {
         return;
       }
-
-      const scrollTop = event.currentTarget.scrollTop;
-      if (readingScrollSaveRef.current) {
-        clearTimeout(readingScrollSaveRef.current);
+      if (event.currentTarget.scrollTop >= 0) {
+        setSaveState('dirty');
       }
-      readingScrollSaveRef.current = setTimeout(() => {
-        onPatch(unit.id, { position: { scrollTop } }).catch(() => undefined);
-      }, 250);
     };
 
     return (
@@ -978,4 +1027,4 @@ function UnitWorkspace({
       </p>
     </CardShell>
   );
-}
+});

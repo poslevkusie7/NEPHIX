@@ -150,6 +150,84 @@ export async function revokeAllRefreshTokensForUser(userId: string) {
   });
 }
 
+export async function createPasswordResetToken(
+  userId: string,
+  tokenHash: string,
+  expiresAt: Date,
+) {
+  return prisma.$transaction(async (tx) => {
+    await tx.passwordResetToken.updateMany({
+      where: {
+        userId,
+        usedAt: null,
+      },
+      data: {
+        usedAt: new Date(),
+      },
+    });
+
+    return tx.passwordResetToken.create({
+      data: {
+        userId,
+        tokenHash,
+        expiresAt,
+      },
+    });
+  });
+}
+
+export async function getPasswordResetTokenByHash(tokenHash: string) {
+  return prisma.passwordResetToken.findUnique({
+    where: { tokenHash },
+    include: { user: true },
+  });
+}
+
+export async function consumePasswordResetTokenAndSetPassword(
+  tokenId: string,
+  userId: string,
+  passwordHash: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    await tx.passwordResetToken.update({
+      where: { id: tokenId },
+      data: {
+        usedAt: new Date(),
+      },
+    });
+
+    await tx.passwordResetToken.updateMany({
+      where: {
+        userId,
+        usedAt: null,
+        id: {
+          not: tokenId,
+        },
+      },
+      data: {
+        usedAt: new Date(),
+      },
+    });
+
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash,
+      },
+    });
+
+    await tx.refreshToken.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+  });
+}
+
 export async function rotateRefreshToken(
   oldTokenId: string,
   userId: string,
