@@ -19,6 +19,7 @@ import type {
   AssignmentStateDTO,
   AssignmentSummaryDTO,
   BookmarkUnitRequest,
+  CompleteUnitResponse,
   PatchUnitStateRequest,
   RevisionIssue,
   UserUnitStateDTO,
@@ -310,11 +311,9 @@ export function StudyClient() {
     }
 
     const targetIndex = viewUnitIndex + delta;
-    if (targetIndex < 0 || targetIndex >= units.length) {
-      return;
-    }
-
-    if (!canOpenUnit(targetIndex)) {
+    const shouldAutoCompleteEssayOnForwardNavigation =
+      delta > 0 && assignment?.taskType === 'essay' && currentUnit.id === activeUnitId;
+    if (!shouldAutoCompleteEssayOnForwardNavigation && (targetIndex < 0 || targetIndex >= units.length)) {
       return;
     }
 
@@ -325,11 +324,45 @@ export function StudyClient() {
         return;
       }
 
+      if (shouldAutoCompleteEssayOnForwardNavigation) {
+        const completed = await completeCurrentUnitAndRefresh();
+        if (!completed) {
+          return;
+        }
+        return;
+      }
+
+      if (!canOpenUnit(targetIndex)) {
+        return;
+      }
+
       setError(null);
       setViewUnitId(units[targetIndex].id);
     } finally {
       navigationInFlightRef.current = false;
     }
+  }
+
+  async function completeCurrentUnitAndRefresh(): Promise<boolean> {
+    if (!currentUnit) {
+      return false;
+    }
+
+    const response = await apiFetch(`/api/units/${currentUnit.id}/complete`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      setError(body?.error ?? 'Failed to complete unit.');
+      return false;
+    }
+
+    const body = (await response.json()) as { result: CompleteUnitResponse };
+    setError(null);
+    setViewUnitId(body.result.nextUnitId ?? null);
+    await refreshCurrentAssignment();
+    return true;
   }
 
   async function patchUnitState(unitId: string, payload: PatchUnitStateRequest): Promise<void> {
@@ -424,19 +457,10 @@ export function StudyClient() {
         return;
       }
 
-      const response = await apiFetch(`/api/units/${currentUnit.id}/complete`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        setError(body?.error ?? 'Failed to complete unit.');
+      const completed = await completeCurrentUnitAndRefresh();
+      if (!completed) {
         return;
       }
-
-      setError(null);
-      setViewUnitId(null);
-      await refreshCurrentAssignment();
     } finally {
       navigationInFlightRef.current = false;
     }
@@ -580,18 +604,31 @@ export function StudyClient() {
               <button type="button" className="btn" onClick={() => void moveUnit(1)}>
                 Next Unit
               </button>
-              <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
-                {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={completeUnit}
-                disabled={currentUnit.id !== activeUnitId}
-              >
-                Mark Complete
-              </button>
+              {currentUnit.unitType === 'reading' ? (
+                <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
+                  {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
+                </button>
+              ) : null}
+              {currentUnit.unitType === 'reading' ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={completeUnit}
+                  disabled={currentUnit.id !== activeUnitId}
+                >
+                  Mark Complete
+                </button>
+              ) : null}
             </div>
+            {currentUnit.unitType === 'reading' ? (
+              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
+                Bookmark saves this reading fragment for later review. It does not change completion progress.
+              </p>
+            ) : (
+              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
+                Essay flow: check "I confirm..." to save this step, then press Next Unit to continue.
+              </p>
+            )}
 
             <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
               Unit {viewUnitIndex + 1}/{units.length} • Swipe left/right for next unit
@@ -696,6 +733,23 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
     setContent((prev) => ({ ...prev, ...patch }));
   }
 
+  async function setConfirmedAndPersist(confirmed: boolean) {
+    const nextContent = { ...content, confirmed };
+    setContent(nextContent);
+
+    if (!isActive) {
+      return;
+    }
+
+    setSaveState('saving');
+    try {
+      await onPatch(unit.id, { content: nextContent });
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
+  }
+
   const persist = useCallback(async () => {
     if (!isActive) {
       return true;
@@ -792,7 +846,9 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
           <input
             type="checkbox"
             checked={confirmed}
-            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+            onChange={(event) => {
+              void setConfirmedAndPersist(event.target.checked);
+            }}
             disabled={!isActive}
           />
           <span>I confirm this thesis as final for this assignment</span>
@@ -811,94 +867,95 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
 
     return (
       <CardShell title={unit.title} subtitle="Adjust section plan while staying close to target word balance.">
-        <div style={{ display: 'grid', gap: 10 }}>
-          {sections.map((rawSection, index) => {
-            const section = isObjectRecord(rawSection) ? rawSection : {};
-            const id = typeof section.id === 'string' ? section.id : `section-${index + 1}`;
-            const title = typeof section.title === 'string' ? section.title : '';
-            const guidingQuestion =
-              typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '';
-            const targetWords =
-              typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0;
+        <div className="outline-table-wrap">
+          <table className="outline-table">
+            <thead>
+              <tr>
+                <th scope="col">Section</th>
+                <th scope="col">Guiding Question</th>
+                <th scope="col">Target Words</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sections.map((rawSection, index) => {
+                const section = isObjectRecord(rawSection) ? rawSection : {};
+                const id = typeof section.id === 'string' ? section.id : `section-${index + 1}`;
+                const title = typeof section.title === 'string' ? section.title : '';
+                const guidingQuestion =
+                  typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '';
+                const targetWords =
+                  typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0;
 
-            return (
-              <div
-                key={id}
-                style={{
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 12,
-                  padding: 10,
-                  display: 'grid',
-                  gap: 8,
-                }}
-              >
-                <label className="field">
-                  <span>Section title</span>
-                  <input
-                    value={title}
-                    onChange={(event) => {
-                      const next = [...sections];
-                      next[index] = {
-                        ...(isObjectRecord(next[index]) ? next[index] : {}),
-                        id,
-                        title: event.target.value,
-                        guidingQuestion,
-                        targetWords,
-                      };
-                      updateContent({ sections: next });
-                    }}
-                    disabled={!isActive}
-                  />
-                </label>
-                <label className="field">
-                  <span>Guiding question</span>
-                  <input
-                    value={guidingQuestion}
-                    onChange={(event) => {
-                      const next = [...sections];
-                      next[index] = {
-                        ...(isObjectRecord(next[index]) ? next[index] : {}),
-                        id,
-                        title,
-                        guidingQuestion: event.target.value,
-                        targetWords,
-                      };
-                      updateContent({ sections: next });
-                    }}
-                    disabled={!isActive}
-                  />
-                </label>
-                <label className="field">
-                  <span>Target words</span>
-                  <input
-                    type="number"
-                    value={targetWords}
-                    onChange={(event) => {
-                      const value = Number(event.target.value);
-                      const bounded = Math.max(0, Number.isFinite(value) ? value : 0);
-                      const next = [...sections];
-                      next[index] = {
-                        ...(isObjectRecord(next[index]) ? next[index] : {}),
-                        id,
-                        title,
-                        guidingQuestion,
-                        targetWords: bounded,
-                      };
-                      updateContent({ sections: next });
-                    }}
-                    disabled={!isActive}
-                  />
-                </label>
-              </div>
-            );
-          })}
+                return (
+                  <tr key={id}>
+                    <td>
+                      <input
+                        value={title}
+                        onChange={(event) => {
+                          const next = [...sections];
+                          next[index] = {
+                            ...(isObjectRecord(next[index]) ? next[index] : {}),
+                            id,
+                            title: event.target.value,
+                            guidingQuestion,
+                            targetWords,
+                          };
+                          updateContent({ sections: next });
+                        }}
+                        disabled={!isActive}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        value={guidingQuestion}
+                        onChange={(event) => {
+                          const next = [...sections];
+                          next[index] = {
+                            ...(isObjectRecord(next[index]) ? next[index] : {}),
+                            id,
+                            title,
+                            guidingQuestion: event.target.value,
+                            targetWords,
+                          };
+                          updateContent({ sections: next });
+                        }}
+                        disabled={!isActive}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        value={targetWords}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          const bounded = Math.max(0, Number.isFinite(value) ? value : 0);
+                          const next = [...sections];
+                          next[index] = {
+                            ...(isObjectRecord(next[index]) ? next[index] : {}),
+                            id,
+                            title,
+                            guidingQuestion,
+                            targetWords: bounded,
+                          };
+                          updateContent({ sections: next });
+                        }}
+                        disabled={!isActive}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
 
         <label className="row" style={{ alignItems: 'center' }}>
           <input
             type="checkbox"
             checked={confirmed}
-            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+            onChange={(event) => {
+              void setConfirmedAndPersist(event.target.checked);
+            }}
             disabled={!isActive}
           />
           <span>I confirm this outline</span>
@@ -935,7 +992,9 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
           <input
             type="checkbox"
             checked={confirmed}
-            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+            onChange={(event) => {
+              void setConfirmedAndPersist(event.target.checked);
+            }}
             disabled={!isActive}
           />
           <span>I confirm this section draft is ready</span>
@@ -1017,7 +1076,9 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
         <input
           type="checkbox"
           checked={confirmed}
-          onChange={(event) => updateContent({ confirmed: event.target.checked })}
+          onChange={(event) => {
+            void setConfirmedAndPersist(event.target.checked);
+          }}
           disabled={!isActive}
         />
         <span>I confirm revision is complete for this assignment.</span>

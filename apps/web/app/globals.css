@@ -101,6 +101,58 @@ button {
   color: var(--danger);
 }
 
+.outline-table-wrap {
+  border: 1px solid #b9ddd5;
+  border-radius: 12px;
+  overflow-x: auto;
+  background: #f5fffc;
+}
+
+.outline-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.outline-table th {
+  text-align: left;
+  background: #d8f4ee;
+  color: #0f4f4a;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 10px 12px;
+  border-right: 1px solid #b9ddd5;
+  border-bottom: 1px solid #b9ddd5;
+}
+
+.outline-table th:last-child {
+  border-right: none;
+}
+
+.outline-table td {
+  padding: 10px 12px;
+  border-right: 1px solid #d3e6e1;
+  border-bottom: 1px solid #d3e6e1;
+  vertical-align: top;
+  background: #ffffff;
+}
+
+.outline-table td:last-child {
+  border-right: none;
+}
+
+.outline-table tr:last-child td {
+  border-bottom: none;
+}
+
+.outline-table input {
+  width: 100%;
+  border: 1px solid #cddbe7;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+}
+
 .muted {
   color: var(--muted);
 }
