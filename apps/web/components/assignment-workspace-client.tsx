@@ -12,7 +12,7 @@ import type {
   RevisionIssue,
   UserUnitStateDTO,
 } from '@nephix/contracts';
-import { CardShell, UnitStatusBadge } from '@nephix/ui';
+import { UnitStatusBadge } from '@nephix/ui';
 
 function countWords(text: string): number {
   return text
@@ -321,10 +321,16 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
             {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
           </p>
           <h2 style={{ margin: '6px 0 0' }}>{assignment.title}</h2>
-          <p className="muted" style={{ margin: '6px 0 0' }}>
-            {completedUnits}/{units.length} posts complete
-            {activeUnitIndex >= 0 ? ` • Active post ${activeUnitIndex + 1}` : ' • Assignment complete'}
-          </p>
+          {assignment.taskType === 'essay' ? (
+            <p className="muted" style={{ margin: '6px 0 0' }}>
+              {units.length} posts in this assignment feed.
+            </p>
+          ) : (
+            <p className="muted" style={{ margin: '6px 0 0' }}>
+              {completedUnits}/{units.length} posts complete
+              {activeUnitIndex >= 0 ? ` • Active post ${activeUnitIndex + 1}` : ' • Assignment complete'}
+            </p>
+          )}
 
           <div
             style={{
@@ -352,8 +358,8 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
             {units.map((unit, index) => {
               const unitState = stateByUnit.get(unit.id);
               const isActive = unit.id === activeUnitId;
-              const isCompleted = unitState?.status === 'completed';
               const isEditable = true;
+              const showStatusBadge = assignment.taskType !== 'essay';
 
               return (
                 <article
@@ -372,7 +378,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                       </p>
                       <h3 style={{ margin: '4px 0 0' }}>{unit.title}</h3>
                     </div>
-                    <UnitStatusBadge status={unitState?.status ?? 'unread'} />
+                    {showStatusBadge ? <UnitStatusBadge status={unitState?.status ?? 'unread'} /> : null}
                   </div>
 
                   <div style={{ marginTop: 12 }}>
@@ -397,28 +403,29 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                         {unitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
                       </button>
                     ) : null}
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => void completeUnit(unit.id)}
-                      disabled={!isActive || isCompleted || completingUnitId === unit.id}
-                    >
-                      {isCompleted
-                        ? 'Completed'
-                        : completingUnitId === unit.id
-                          ? 'Completing...'
-                          : 'Complete & Continue'}
-                    </button>
                   </div>
-
-                  {!isActive && !isCompleted ? (
-                    <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-                      You can edit this post now, but completion still follows active order.
-                    </p>
-                  ) : null}
                 </article>
               );
             })}
+          </div>
+
+          <div className="row mobile-stack" style={{ marginTop: 16 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                if (activeUnitId) {
+                  void completeUnit(activeUnitId);
+                }
+              }}
+              disabled={!activeUnitId || completingUnitId === activeUnitId}
+            >
+              {!activeUnitId
+                ? 'Assignment Completed'
+                : completingUnitId === activeUnitId
+                  ? 'Completing...'
+                  : 'Complete Active Post'}
+            </button>
           </div>
         </section>
       ) : (
@@ -454,8 +461,13 @@ function UnitWorkspace({
   const [content, setContent] = useState<Record<string, unknown>>({});
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   const readingContainerRef = useRef<HTMLDivElement | null>(null);
+  const initializedUnitRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (initializedUnitRef.current === unit.id) {
+      return;
+    }
+
     const existing = unitState?.content;
     if (isObjectRecord(existing)) {
       setContent(existing);
@@ -474,8 +486,9 @@ function UnitWorkspace({
       }
     }
 
+    initializedUnitRef.current = unit.id;
     setSaveState('idle');
-  }, [unit.id, unit.unitType, unit.payload, unitState?.updatedAtISO, unitState?.content]);
+  }, [unit.id, unit.unitType, unit.payload, unitState?.content]);
 
   useEffect(() => {
     if (unit.unitType !== 'reading') {
@@ -489,33 +502,6 @@ function UnitWorkspace({
       readingContainerRef.current.scrollTop = scrollTop;
     }
   }, [unit.unitType, unit.id, unitState?.position]);
-
-  useEffect(() => {
-    if (!isEditable || saveState !== 'dirty') {
-      return;
-    }
-
-    const timeout = setTimeout(() => {
-      void (async () => {
-        setSaveState('saving');
-        try {
-          if (unit.unitType === 'reading') {
-            const scrollTop = readingContainerRef.current?.scrollTop ?? 0;
-            await onPatch(unit.id, { position: { scrollTop } });
-          } else {
-            await onPatch(unit.id, { content });
-          }
-          setSaveState('saved');
-        } catch {
-          setSaveState('error');
-        }
-      })();
-    }, 500);
-
-    return () => {
-      clearTimeout(timeout);
-    };
-  }, [content, isEditable, onPatch, saveState, unit.id, unit.unitType]);
 
   const writingSections = useMemo(() => {
     return units
@@ -537,17 +523,18 @@ function UnitWorkspace({
     setContent((prev) => ({ ...prev, ...patch }));
   }
 
-  async function setConfirmedAndPersist(confirmed: boolean) {
-    const nextContent = { ...content, confirmed };
-    setContent(nextContent);
-
-    if (!isEditable) {
+  async function saveCurrent(): Promise<void> {
+    if (!isEditable || saveState === 'saving') {
       return;
     }
-
     setSaveState('saving');
     try {
-      await onPatch(unit.id, { content: nextContent });
+      if (unit.unitType === 'reading') {
+        const scrollTop = readingContainerRef.current?.scrollTop ?? 0;
+        await onPatch(unit.id, { position: { scrollTop } });
+      } else {
+        await onPatch(unit.id, { content });
+      }
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -565,6 +552,32 @@ function UnitWorkspace({
             ? 'Save failed'
             : '';
 
+  const writingGuideMap = useMemo(() => {
+    const outlineUnit = units.find((entry) => entry.unitType === 'outline');
+    if (!outlineUnit) {
+      return new Map<string, string>();
+    }
+
+    const outlineState = unitStateMap.get(outlineUnit.id);
+    const outlineContent = isObjectRecord(outlineState?.content) ? outlineState.content : {};
+    const payloadSections = Array.isArray(outlineUnit.payload.sections) ? outlineUnit.payload.sections : [];
+    const contentSections = Array.isArray(outlineContent.sections) ? outlineContent.sections : payloadSections;
+
+    const map = new Map<string, string>();
+    for (const rawSection of contentSections) {
+      if (!isObjectRecord(rawSection)) {
+        continue;
+      }
+      const sectionId = typeof rawSection.id === 'string' ? rawSection.id : '';
+      const question =
+        typeof rawSection.guidingQuestion === 'string' ? rawSection.guidingQuestion.trim() : '';
+      if (sectionId && question) {
+        map.set(sectionId, question);
+      }
+    }
+    return map;
+  }, [unitStateMap, units]);
+
   if (unit.unitType === 'reading') {
     const text = typeof unit.payload.text === 'string' ? unit.payload.text : '';
 
@@ -578,7 +591,7 @@ function UnitWorkspace({
     };
 
     return (
-      <CardShell title={unit.title} subtitle="Read this fragment and move to the next post when done.">
+      <div style={{ display: 'grid', gap: 10 }}>
         <div
           ref={readingContainerRef}
           onScroll={onReadingScroll}
@@ -594,10 +607,17 @@ function UnitWorkspace({
         >
           {text}
         </div>
-        <p className="muted" style={{ marginBottom: 0 }}>
-          {saveLabel || 'Scroll position is saved automatically.'}
-        </p>
-      </CardShell>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+            {saveState === 'saving' ? 'Saving...' : 'Save'}
+          </button>
+          {saveLabel ? (
+            <p className="muted" style={{ margin: 0 }}>
+              {saveLabel}
+            </p>
+          ) : null}
+        </div>
+      </div>
     );
   }
 
@@ -606,7 +626,7 @@ function UnitWorkspace({
     const confirmed = Boolean(content.confirmed);
 
     return (
-      <CardShell title={unit.title} subtitle="Formulate one clear thesis and confirm it.">
+      <div style={{ display: 'grid', gap: 10 }}>
         <label className="field">
           <span>Thesis statement</span>
           <textarea
@@ -621,16 +641,21 @@ function UnitWorkspace({
             type="checkbox"
             checked={confirmed}
             onChange={(event) => {
-              void setConfirmedAndPersist(event.target.checked);
+              updateContent({ confirmed: event.target.checked });
             }}
             disabled={!isEditable}
           />
           <span>I confirm this thesis as final for this assignment</span>
         </label>
-        <p className="muted" style={{ margin: 0 }}>
-          {thesis.length} characters. {saveLabel}
-        </p>
-      </CardShell>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+            {saveState === 'saving' ? 'Saving...' : 'Save'}
+          </button>
+          <p className="muted" style={{ margin: 0 }}>
+            {thesis.length} characters{saveLabel ? ` • ${saveLabel}` : ''}
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -640,7 +665,7 @@ function UnitWorkspace({
     const confirmed = Boolean(content.confirmed);
 
     return (
-      <CardShell title={unit.title} subtitle="Adjust section plan while staying close to target word balance.">
+      <div style={{ display: 'grid', gap: 10 }}>
         <div className="outline-table-wrap">
           <table className="outline-table">
             <thead>
@@ -728,16 +753,23 @@ function UnitWorkspace({
             type="checkbox"
             checked={confirmed}
             onChange={(event) => {
-              void setConfirmedAndPersist(event.target.checked);
+              updateContent({ confirmed: event.target.checked });
             }}
             disabled={!isEditable}
           />
           <span>I confirm this outline</span>
         </label>
-        <p className="muted" style={{ margin: 0 }}>
-          {saveLabel}
-        </p>
-      </CardShell>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+            {saveState === 'saving' ? 'Saving...' : 'Save'}
+          </button>
+          {saveLabel ? (
+            <p className="muted" style={{ margin: 0 }}>
+              {saveLabel}
+            </p>
+          ) : null}
+        </div>
+      </div>
     );
   }
 
@@ -745,12 +777,17 @@ function UnitWorkspace({
     const text = typeof content.text === 'string' ? content.text : '';
     const confirmed = Boolean(content.confirmed);
     const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
+    const sectionId = typeof unit.payload.sectionId === 'string' ? unit.payload.sectionId : '';
+    const outlineGuide = sectionId ? writingGuideMap.get(sectionId) : undefined;
+    const guidingQuestion =
+      outlineGuide ??
+      (typeof unit.payload.guidingQuestion === 'string' ? unit.payload.guidingQuestion : '');
 
     return (
-      <CardShell title={unit.title} subtitle="Draft this section only. Focus on ideas and flow first.">
-        {typeof unit.payload.guidingQuestion === 'string' ? (
+      <div style={{ display: 'grid', gap: 10 }}>
+        {guidingQuestion ? (
           <p className="muted" style={{ marginTop: 0 }}>
-            {unit.payload.guidingQuestion}
+            {guidingQuestion}
           </p>
         ) : null}
         <label className="field">
@@ -767,17 +804,23 @@ function UnitWorkspace({
             type="checkbox"
             checked={confirmed}
             onChange={(event) => {
-              void setConfirmedAndPersist(event.target.checked);
+              updateContent({ confirmed: event.target.checked });
             }}
             disabled={!isEditable}
           />
           <span>I confirm this section draft is ready</span>
         </label>
-        <p className="muted" style={{ margin: 0 }}>
-          {countWords(text)} words
-          {typeof targetWords === 'number' ? ` (target ${targetWords})` : ''}. {saveLabel}
-        </p>
-      </CardShell>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+            {saveState === 'saving' ? 'Saving...' : 'Save'}
+          </button>
+          <p className="muted" style={{ margin: 0 }}>
+            {countWords(text)} words
+            {typeof targetWords === 'number' ? ` (target ${targetWords})` : ''}
+            {saveLabel ? ` • ${saveLabel}` : ''}
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -788,7 +831,7 @@ function UnitWorkspace({
   const fullDraft = writingSections.map((section) => `## ${section.title}\n${section.text}`).join('\n\n');
 
   return (
-    <CardShell title={unit.title} subtitle="Run rule-based checks and confirm revision goals.">
+    <div style={{ display: 'grid', gap: 10 }}>
       <label className="field">
         <span>Current draft context (read-only)</span>
         <textarea value={fullDraft} readOnly style={{ minHeight: 220, background: '#f8fafc' }} />
@@ -852,15 +895,22 @@ function UnitWorkspace({
           type="checkbox"
           checked={confirmed}
           onChange={(event) => {
-            void setConfirmedAndPersist(event.target.checked);
+            updateContent({ confirmed: event.target.checked });
           }}
           disabled={!isEditable}
         />
         <span>I confirm revision is complete for this assignment.</span>
       </label>
-      <p className="muted" style={{ margin: 0 }}>
-        {saveLabel}
-      </p>
-    </CardShell>
+      <div className="row" style={{ alignItems: 'center' }}>
+        <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+          {saveState === 'saving' ? 'Saving...' : 'Save'}
+        </button>
+        {saveLabel ? (
+          <p className="muted" style={{ margin: 0 }}>
+            {saveLabel}
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
