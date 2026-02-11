@@ -182,36 +182,29 @@ export function canCompleteUnit({ unitType, content }: CompletionInput): { ok: b
 
   if (unitType === 'thesis') {
     const thesis = typeof data.thesis === 'string' ? data.thesis.trim() : '';
-    const confirmed = Boolean(data.confirmed);
-    if (!thesis || thesis.length < 10 || !confirmed) {
-      return { ok: false, reason: 'Thesis unit requires a confirmed thesis (minimum 10 chars).' };
+    if (!thesis || thesis.length < 10) {
+      return { ok: false, reason: 'Thesis unit requires a thesis statement (minimum 10 chars).' };
     }
     return { ok: true };
   }
 
   if (unitType === 'outline') {
     const sections = Array.isArray(data.sections) ? data.sections : [];
-    const confirmed = Boolean(data.confirmed);
-    if (sections.length === 0 || !confirmed) {
-      return { ok: false, reason: 'Outline unit requires at least one section and confirmation.' };
+    if (sections.length === 0) {
+      return { ok: false, reason: 'Outline unit requires at least one section.' };
     }
     return { ok: true };
   }
 
   if (unitType === 'writing') {
     const text = typeof data.text === 'string' ? data.text.trim() : '';
-    const confirmed = Boolean(data.confirmed);
-    if (!text || !confirmed) {
-      return { ok: false, reason: 'Writing unit requires draft text and confirmation.' };
+    if (!text) {
+      return { ok: false, reason: 'Writing unit requires draft text.' };
     }
     return { ok: true };
   }
 
   if (unitType === 'revise') {
-    const confirmed = Boolean(data.confirmed);
-    if (!confirmed) {
-      return { ok: false, reason: 'Revise unit requires confirmation of revision completion.' };
-    }
     return { ok: true };
   }
 

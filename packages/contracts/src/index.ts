@@ -89,6 +89,17 @@ export const assignmentSummarySchema = z.object({
 });
 export type AssignmentSummaryDTO = z.infer<typeof assignmentSummarySchema>;
 
+export const bookmarkedReadingUnitSchema = z.object({
+  unitId: z.string().min(1),
+  assignmentId: z.string().min(1),
+  assignmentTitle: z.string().min(1),
+  assignmentSubject: z.string().min(1),
+  unitTitle: z.string().min(1),
+  preview: z.string().min(1),
+  updatedAtISO: z.string().datetime(),
+});
+export type BookmarkedReadingUnitDTO = z.infer<typeof bookmarkedReadingUnitSchema>;
+
 export const assignmentDetailSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),

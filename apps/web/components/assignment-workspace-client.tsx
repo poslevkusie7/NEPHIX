@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, UIEvent as ReactUIEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AssignmentDetailDTO,
@@ -12,7 +12,6 @@ import type {
   RevisionIssue,
   UserUnitStateDTO,
 } from '@nephix/contracts';
-import { UnitStatusBadge } from '@nephix/ui';
 
 function countWords(text: string): number {
   return text
@@ -31,6 +30,7 @@ type AssignmentWorkspaceClientProps = {
 
 export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceClientProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [assignment, setAssignment] = useState<AssignmentDetailDTO | null>(null);
@@ -39,6 +39,8 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   const [error, setError] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [completingUnitId, setCompletingUnitId] = useState<string | null>(null);
+  const [finishingAssignment, setFinishingAssignment] = useState(false);
+  const bookmarkJumpedRef = useRef<string | null>(null);
 
   const apiFetch = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -107,17 +109,34 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   }, [loadInitial]);
 
   const units = assignment?.units ?? [];
+  const bookmarkUnitId = searchParams.get('unitId');
   const stateByUnit = useMemo(() => {
     const entries = assignmentState?.unitStates ?? [];
     return new Map(entries.map((entry) => [entry.unitId, entry]));
   }, [assignmentState]);
 
   const activeUnitId = assignmentState?.currentUnitId ?? units[0]?.id ?? null;
-  const activeUnitIndex = activeUnitId ? units.findIndex((unit) => unit.id === activeUnitId) : -1;
   const completedUnits = useMemo(
     () => (assignmentState?.unitStates ?? []).filter((entry) => entry.status === 'completed').length,
     [assignmentState],
   );
+  const allUnitsCompleted = units.length > 0 && completedUnits >= units.length;
+
+  useEffect(() => {
+    if (!bookmarkUnitId || !assignment) {
+      return;
+    }
+    if (bookmarkJumpedRef.current === bookmarkUnitId) {
+      return;
+    }
+    const target = document.getElementById(`unit-${bookmarkUnitId}`);
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    bookmarkJumpedRef.current = bookmarkUnitId;
+  }, [assignment, bookmarkUnitId]);
 
   async function patchUnitState(unitId: string, payload: PatchUnitStateRequest): Promise<void> {
     const response = await apiFetch(`/api/units/${unitId}/state`, {
@@ -155,11 +174,6 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   }
 
   async function completeUnit(unitId: string) {
-    if (!activeUnitId || unitId !== activeUnitId) {
-      setError('Only the active post can be completed.');
-      return;
-    }
-
     setCompletingUnitId(unitId);
     try {
       const response = await apiFetch(`/api/units/${unitId}/complete`, {
@@ -265,6 +279,23 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     }
   }
 
+  async function finishAssignment() {
+    if (!allUnitsCompleted || finishingAssignment) {
+      return;
+    }
+
+    setFinishingAssignment(true);
+    setError(null);
+    try {
+      await refreshCurrentAssignment();
+      router.push('/study');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to finish assignment.');
+    } finally {
+      setFinishingAssignment(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="container" style={{ paddingTop: 30 }}>
@@ -328,7 +359,6 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
           ) : (
             <p className="muted" style={{ margin: '6px 0 0' }}>
               {completedUnits}/{units.length} posts complete
-              {activeUnitIndex >= 0 ? ` • Active post ${activeUnitIndex + 1}` : ' • Assignment complete'}
             </p>
           )}
 
@@ -358,17 +388,25 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
             {units.map((unit, index) => {
               const unitState = stateByUnit.get(unit.id);
               const isActive = unit.id === activeUnitId;
+              const isCompleted = unitState?.status === 'completed';
               const isEditable = true;
-              const showStatusBadge = assignment.taskType !== 'essay';
+              const isBookmarkTarget = bookmarkUnitId === unit.id;
+              const postTitle =
+                unit.unitType === 'writing' ? unit.title.replace(/^Write:\s*/i, '') : unit.title;
 
               return (
                 <article
                   key={unit.id}
+                  id={`unit-${unit.id}`}
                   className="panel"
                   style={{
                     padding: 14,
-                    borderColor: isActive ? '#5eead4' : '#dbe3ec',
-                    boxShadow: isActive ? '0 10px 24px rgba(13, 148, 136, 0.18)' : undefined,
+                    borderColor: isBookmarkTarget ? '#38bdf8' : isActive ? '#5eead4' : '#dbe3ec',
+                    boxShadow: isBookmarkTarget
+                      ? '0 10px 24px rgba(14, 165, 233, 0.25)'
+                      : isActive
+                        ? '0 10px 24px rgba(13, 148, 136, 0.18)'
+                        : undefined,
                   }}
                 >
                   <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -376,9 +414,8 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                       <p className="muted" style={{ margin: 0, fontSize: 12 }}>
                         Post {index + 1}/{units.length} • {unit.unitType}
                       </p>
-                      <h3 style={{ margin: '4px 0 0' }}>{unit.title}</h3>
+                      <h3 style={{ margin: '4px 0 0' }}>{postTitle}</h3>
                     </div>
-                    {showStatusBadge ? <UnitStatusBadge status={unitState?.status ?? 'unread'} /> : null}
                   </div>
 
                   <div style={{ marginTop: 12 }}>
@@ -387,8 +424,12 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                       unitState={unitState}
                       units={units}
                       unitStateMap={stateByUnit}
+                      isActive={isActive}
+                      isCompleted={isCompleted}
+                      completingUnitId={completingUnitId}
                       isEditable={isEditable}
                       onPatch={patchUnitState}
+                      onCompleteUnit={completeUnit}
                       onRevisionCheck={runRevisionChecks}
                     />
                   </div>
@@ -409,22 +450,24 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
             })}
           </div>
 
-          <div className="row mobile-stack" style={{ marginTop: 16 }}>
+          <div
+            className="row mobile-stack"
+            style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}
+          >
+            <p className="muted" style={{ margin: 0 }}>
+              Save each post to update progress. Finish unlocks at 100%.
+            </p>
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => {
-                if (activeUnitId) {
-                  void completeUnit(activeUnitId);
-                }
-              }}
-              disabled={!activeUnitId || completingUnitId === activeUnitId}
+              onClick={() => void finishAssignment()}
+              disabled={!allUnitsCompleted || finishingAssignment}
             >
-              {!activeUnitId
-                ? 'Assignment Completed'
-                : completingUnitId === activeUnitId
-                  ? 'Completing...'
-                  : 'Complete Active Post'}
+              {finishingAssignment
+                ? 'Finishing...'
+                : assignment.taskType === 'essay'
+                  ? 'Finish Writing'
+                  : 'Finish Reading'}
             </button>
           </div>
         </section>
@@ -444,8 +487,12 @@ type UnitWorkspaceProps = {
   unitState: UserUnitStateDTO | undefined;
   units: AssignmentDetailDTO['units'];
   unitStateMap: Map<string, UserUnitStateDTO>;
+  isActive: boolean;
+  isCompleted: boolean;
+  completingUnitId: string | null;
   isEditable: boolean;
   onPatch: (unitId: string, payload: PatchUnitStateRequest) => Promise<void>;
+  onCompleteUnit: (unitId: string) => Promise<void>;
   onRevisionCheck: () => Promise<RevisionIssue[]>;
 };
 
@@ -454,12 +501,17 @@ function UnitWorkspace({
   unitState,
   units,
   unitStateMap,
+  isActive,
+  isCompleted,
+  completingUnitId,
   isEditable,
   onPatch,
+  onCompleteUnit,
   onRevisionCheck,
 }: UnitWorkspaceProps) {
   const [content, setContent] = useState<Record<string, unknown>>({});
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
+  const contentRef = useRef<Record<string, unknown>>({});
   const readingContainerRef = useRef<HTMLDivElement | null>(null);
   const initializedUnitRef = useRef<string | null>(null);
 
@@ -470,18 +522,28 @@ function UnitWorkspace({
 
     const existing = unitState?.content;
     if (isObjectRecord(existing)) {
+      contentRef.current = existing;
       setContent(existing);
     } else {
       if (unit.unitType === 'outline') {
         const sections = Array.isArray(unit.payload.sections) ? unit.payload.sections : [];
-        setContent({ sections, confirmed: false });
+        const nextContent = { sections };
+        contentRef.current = nextContent;
+        setContent(nextContent);
       } else if (unit.unitType === 'thesis') {
-        setContent({ thesis: '', confirmed: false });
+        const nextContent = { thesis: '' };
+        contentRef.current = nextContent;
+        setContent(nextContent);
       } else if (unit.unitType === 'writing') {
-        setContent({ text: '', confirmed: false });
+        const nextContent = { text: '' };
+        contentRef.current = nextContent;
+        setContent(nextContent);
       } else if (unit.unitType === 'revise') {
-        setContent({ confirmed: false, issues: [] });
+        const nextContent = { confirmed: false, issues: [] };
+        contentRef.current = nextContent;
+        setContent(nextContent);
       } else {
+        contentRef.current = {};
         setContent({});
       }
     }
@@ -520,12 +582,14 @@ function UnitWorkspace({
 
   function updateContent(patch: Record<string, unknown>) {
     setSaveState('dirty');
-    setContent((prev) => ({ ...prev, ...patch }));
+    const nextContent = { ...contentRef.current, ...patch };
+    contentRef.current = nextContent;
+    setContent(nextContent);
   }
 
-  async function saveCurrent(): Promise<void> {
+  async function saveCurrent(): Promise<boolean> {
     if (!isEditable || saveState === 'saving') {
-      return;
+      return false;
     }
     setSaveState('saving');
     try {
@@ -533,11 +597,25 @@ function UnitWorkspace({
         const scrollTop = readingContainerRef.current?.scrollTop ?? 0;
         await onPatch(unit.id, { position: { scrollTop } });
       } else {
-        await onPatch(unit.id, { content });
+        await onPatch(unit.id, { content: contentRef.current });
       }
       setSaveState('saved');
+      return true;
     } catch {
       setSaveState('error');
+      return false;
+    }
+  }
+
+  async function saveAndMaybeComplete(): Promise<void> {
+    const saved = await saveCurrent();
+    if (!saved) {
+      return;
+    }
+
+    const shouldCompleteOnSave = !isCompleted && (unit.unitType !== 'reading' || isActive);
+    if (shouldCompleteOnSave) {
+      await onCompleteUnit(unit.id);
     }
   }
 
@@ -607,23 +685,24 @@ function UnitWorkspace({
         >
           {text}
         </div>
-        <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
-            {saveState === 'saving' ? 'Saving...' : 'Save'}
-          </button>
-          {saveLabel ? (
-            <p className="muted" style={{ margin: 0 }}>
-              {saveLabel}
-            </p>
-          ) : null}
-        </div>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => void saveAndMaybeComplete()}
+          disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+        >
+          {saveState === 'saving' || completingUnitId === unit.id
+            ? 'Saving...'
+            : isCompleted
+              ? 'Finished'
+              : 'Mark finished'}
+        </button>
       </div>
     );
   }
 
   if (unit.unitType === 'thesis') {
     const thesis = typeof content.thesis === 'string' ? content.thesis : '';
-    const confirmed = Boolean(content.confirmed);
 
     return (
       <div style={{ display: 'grid', gap: 10 }}>
@@ -636,19 +715,8 @@ function UnitWorkspace({
             disabled={!isEditable}
           />
         </label>
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => {
-              updateContent({ confirmed: event.target.checked });
-            }}
-            disabled={!isEditable}
-          />
-          <span>I confirm this thesis as final for this assignment</span>
-        </label>
         <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
             {saveState === 'saving' ? 'Saving...' : 'Save'}
           </button>
           <p className="muted" style={{ margin: 0 }}>
@@ -662,7 +730,6 @@ function UnitWorkspace({
   if (unit.unitType === 'outline') {
     const fallbackSections = Array.isArray(unit.payload.sections) ? unit.payload.sections : [];
     const sections = Array.isArray(content.sections) ? content.sections : fallbackSections;
-    const confirmed = Boolean(content.confirmed);
 
     return (
       <div style={{ display: 'grid', gap: 10 }}>
@@ -748,19 +815,8 @@ function UnitWorkspace({
           </table>
         </div>
 
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => {
-              updateContent({ confirmed: event.target.checked });
-            }}
-            disabled={!isEditable}
-          />
-          <span>I confirm this outline</span>
-        </label>
         <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
             {saveState === 'saving' ? 'Saving...' : 'Save'}
           </button>
           {saveLabel ? (
@@ -775,7 +831,6 @@ function UnitWorkspace({
 
   if (unit.unitType === 'writing') {
     const text = typeof content.text === 'string' ? content.text : '';
-    const confirmed = Boolean(content.confirmed);
     const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
     const sectionId = typeof unit.payload.sectionId === 'string' ? unit.payload.sectionId : '';
     const outlineGuide = sectionId ? writingGuideMap.get(sectionId) : undefined;
@@ -799,19 +854,8 @@ function UnitWorkspace({
             style={{ minHeight: 240 }}
           />
         </label>
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => {
-              updateContent({ confirmed: event.target.checked });
-            }}
-            disabled={!isEditable}
-          />
-          <span>I confirm this section draft is ready</span>
-        </label>
         <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
             {saveState === 'saving' ? 'Saving...' : 'Save'}
           </button>
           <p className="muted" style={{ margin: 0 }}>
@@ -828,13 +872,21 @@ function UnitWorkspace({
     ? content.issues.filter((issue) => isObjectRecord(issue))
     : [];
   const confirmed = Boolean(content.confirmed);
-  const fullDraft = writingSections.map((section) => `## ${section.title}\n${section.text}`).join('\n\n');
+  const fullDraft = writingSections
+    .map((section) => `${section.title.replace(/^Write:\s*/i, '')}\n${section.text}`)
+    .join('\n\n');
+  const revisionText = typeof content.revisionText === 'string' ? content.revisionText : fullDraft;
 
   return (
     <div style={{ display: 'grid', gap: 10 }}>
       <label className="field">
-        <span>Current draft context (read-only)</span>
-        <textarea value={fullDraft} readOnly style={{ minHeight: 220, background: '#f8fafc' }} />
+        <span>Revision draft</span>
+        <textarea
+          value={revisionText}
+          onChange={(event) => updateContent({ revisionText: event.target.value })}
+          style={{ minHeight: 220 }}
+          disabled={!isEditable}
+        />
       </label>
 
       <div className="row">
@@ -902,7 +954,7 @@ function UnitWorkspace({
         <span>I confirm revision is complete for this assignment.</span>
       </label>
       <div className="row" style={{ alignItems: 'center' }}>
-        <button type="button" className="btn" onClick={() => void saveCurrent()} disabled={!isEditable || saveState === 'saving'}>
+        <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
           {saveState === 'saving' ? 'Saving...' : 'Save'}
         </button>
         {saveLabel ? (

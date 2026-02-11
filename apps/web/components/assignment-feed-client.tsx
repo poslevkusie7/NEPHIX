@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import type { AssignmentSummaryDTO } from '@nephix/contracts';
+import type { AssignmentSummaryDTO, BookmarkedReadingUnitDTO } from '@nephix/contracts';
 
 function assignmentStatusLabel(status: AssignmentSummaryDTO['status']): string {
   if (status === 'completed') {
@@ -20,6 +20,7 @@ export function AssignmentFeedClient() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [feed, setFeed] = useState<AssignmentSummaryDTO[]>([]);
+  const [bookmarks, setBookmarks] = useState<BookmarkedReadingUnitDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -57,13 +58,18 @@ export function AssignmentFeedClient() {
       const meBody = (await meResponse.json()) as { user: { email: string } };
       setUserEmail(meBody.user.email);
 
-      const feedResponse = await apiFetch('/api/feed');
-      if (!feedResponse.ok) {
+      const [feedResponse, bookmarksResponse] = await Promise.all([
+        apiFetch('/api/feed'),
+        apiFetch('/api/bookmarks'),
+      ]);
+      if (!feedResponse.ok || !bookmarksResponse.ok) {
         throw new Error('Failed to load assignments feed.');
       }
 
       const feedBody = (await feedResponse.json()) as { feed: AssignmentSummaryDTO[] };
+      const bookmarksBody = (await bookmarksResponse.json()) as { bookmarks: BookmarkedReadingUnitDTO[] };
       setFeed(feedBody.feed);
+      setBookmarks(bookmarksBody.bookmarks);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load assignments feed.');
     } finally {
@@ -155,64 +161,102 @@ export function AssignmentFeedClient() {
         </p>
       ) : null}
 
-      <section className="panel" style={{ padding: 16, minHeight: 600 }}>
-        <p className="muted" style={{ marginTop: 0 }}>
-          Scroll feed and open any assignment post to start working.
-        </p>
-
-        {feed.length === 0 ? (
-          <p className="muted" style={{ marginBottom: 0 }}>
-            No assignments found. Seed data and refresh.
+      <div className="feed-layout" style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 1fr) 320px' }}>
+        <section className="panel" style={{ padding: 16, minHeight: 600 }}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Scroll feed and open any assignment post to start working.
           </p>
-        ) : (
-          <div style={{ display: 'grid', gap: 12 }}>
-            {feed.map((assignment) => {
-              const progress =
-                assignment.totalUnits > 0
-                  ? Math.round((assignment.completedUnits / assignment.totalUnits) * 100)
-                  : 0;
-              return (
+
+          {feed.length === 0 ? (
+            <p className="muted" style={{ marginBottom: 0 }}>
+              No assignments found. Seed data and refresh.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {feed.map((assignment) => {
+                const progress =
+                  assignment.totalUnits > 0
+                    ? Math.round((assignment.completedUnits / assignment.totalUnits) * 100)
+                    : 0;
+                return (
+                  <Link
+                    key={assignment.id}
+                    href={`/study/${assignment.id}`}
+                    className="panel"
+                    style={{
+                      textDecoration: 'none',
+                      color: 'inherit',
+                      padding: 14,
+                      display: 'block',
+                    }}
+                  >
+                    <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                      {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
+                    </p>
+                    <h2 style={{ margin: '6px 0 0' }}>{assignment.title}</h2>
+                    <p className="muted" style={{ margin: '6px 0 0' }}>
+                      {assignmentStatusLabel(assignment.status)} • {assignment.completedUnits}/{assignment.totalUnits} posts complete
+                    </p>
+                    <div
+                      style={{
+                        marginTop: 10,
+                        height: 8,
+                        borderRadius: 999,
+                        background: '#e2e8f0',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${progress}%`,
+                          background: '#0f766e',
+                          height: '100%',
+                        }}
+                      />
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <aside className="panel" style={{ padding: 16, height: 'fit-content' }}>
+          <h2 style={{ marginTop: 0, marginBottom: 6 }}>Bookmarks</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Quick access to saved reading fragments.
+          </p>
+          {bookmarks.length === 0 ? (
+            <p className="muted" style={{ marginBottom: 0 }}>
+              No bookmarks yet.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gap: 10 }}>
+              {bookmarks.map((bookmark) => (
                 <Link
-                  key={assignment.id}
-                  href={`/study/${assignment.id}`}
+                  key={bookmark.unitId}
+                  href={`/study/${bookmark.assignmentId}?unitId=${bookmark.unitId}`}
                   className="panel"
                   style={{
                     textDecoration: 'none',
                     color: 'inherit',
-                    padding: 14,
+                    padding: 10,
                     display: 'block',
                   }}
                 >
                   <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                    {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
+                    {bookmark.assignmentSubject}
                   </p>
-                  <h2 style={{ margin: '6px 0 0' }}>{assignment.title}</h2>
-                  <p className="muted" style={{ margin: '6px 0 0' }}>
-                    {assignmentStatusLabel(assignment.status)} • {assignment.completedUnits}/{assignment.totalUnits} posts complete
+                  <p style={{ margin: '4px 0 0', fontWeight: 700 }}>{bookmark.preview}</p>
+                  <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                    {bookmark.assignmentTitle}
                   </p>
-                  <div
-                    style={{
-                      marginTop: 10,
-                      height: 8,
-                      borderRadius: 999,
-                      background: '#e2e8f0',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${progress}%`,
-                        background: '#0f766e',
-                        height: '100%',
-                      }}
-                    />
-                  </div>
                 </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </aside>
+      </div>
     </main>
   );
 }

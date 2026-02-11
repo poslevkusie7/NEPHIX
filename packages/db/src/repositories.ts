@@ -8,6 +8,7 @@ import type {
   AssignmentStateDTO,
   AssignmentSummaryDTO,
   AuthUserDTO,
+  BookmarkedReadingUnitDTO,
   BookmarkUnitRequest,
   CompleteUnitResponse,
   PatchUnitStateRequest,
@@ -52,6 +53,20 @@ function mergeJsonRecord(
   }
   const base = isRecord(existing) ? existing : {};
   return { ...base, ...next } as Prisma.InputJsonValue;
+}
+
+function buildPreviewFromText(text: string): string {
+  const words = text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return 'Open bookmark';
+  }
+
+  const preview = words.slice(0, 3).join(' ');
+  return words.length > 3 ? `${preview}...` : preview;
 }
 
 function mapAuthUser(user: { id: string; email: string; createdAt: Date }): AuthUserDTO {
@@ -318,6 +333,56 @@ export async function listFeedForUser(userId: string): Promise<AssignmentSummary
   return sortAssignmentsByDeadline(mapped);
 }
 
+export async function listBookmarkedReadingUnitsForUser(
+  userId: string,
+): Promise<BookmarkedReadingUnitDTO[]> {
+  const states = await prisma.userUnitState.findMany({
+    where: {
+      userId,
+      bookmarked: true,
+      unit: {
+        unitType: PrismaUnitType.READING,
+        assignment: {
+          active: true,
+        },
+      },
+    },
+    include: {
+      unit: {
+        select: {
+          id: true,
+          title: true,
+          payload: true,
+          assignment: {
+            select: {
+              id: true,
+              title: true,
+              subject: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+
+  return states.map((state) => {
+    const payload = jsonToRecord(state.unit.payload) ?? {};
+    const readingText = typeof payload.text === 'string' ? payload.text : '';
+    const fallbackText = state.unit.title;
+
+    return {
+      unitId: state.unit.id,
+      assignmentId: state.unit.assignment.id,
+      assignmentTitle: state.unit.assignment.title,
+      assignmentSubject: state.unit.assignment.subject,
+      unitTitle: state.unit.title,
+      preview: buildPreviewFromText(readingText || fallbackText),
+      updatedAtISO: state.updatedAt.toISOString(),
+    };
+  });
+}
+
 export async function getAssignmentDetailById(assignmentId: string): Promise<AssignmentDetailDTO> {
   const assignment = await prisma.assignment.findUnique({
     where: { id: assignmentId },
@@ -411,6 +476,9 @@ async function ensureAssignmentState(userId: string, assignmentId: string) {
     throw new NotFoundError('Assignment not found.');
   }
 
+  const firstUnitId = assignment.units[0]?.id ?? null;
+  const validUnitIds = new Set(assignment.units.map((entry) => entry.id));
+
   let state = await prisma.userAssignmentState.findUnique({
     where: {
       userId_assignmentId: {
@@ -421,7 +489,6 @@ async function ensureAssignmentState(userId: string, assignmentId: string) {
   });
 
   if (!state) {
-    const firstUnitId = assignment.units[0]?.id ?? null;
     state = await prisma.userAssignmentState.create({
       data: {
         userId,
@@ -431,6 +498,27 @@ async function ensureAssignmentState(userId: string, assignmentId: string) {
         lastOpenedAt: firstUnitId ? new Date() : null,
       },
     });
+  } else {
+    const hasMissingCurrentUnit =
+      state.currentUnitId !== null && !validUnitIds.has(state.currentUnitId);
+    const needsInitialCurrentUnit = state.currentUnitId === null && firstUnitId !== null;
+
+    if (hasMissingCurrentUnit || needsInitialCurrentUnit) {
+      state = await prisma.userAssignmentState.update({
+        where: {
+          userId_assignmentId: {
+            userId,
+            assignmentId,
+          },
+        },
+        data: {
+          currentUnitId: firstUnitId,
+          status: firstUnitId ? UserAssignmentStatus.IN_PROGRESS : UserAssignmentStatus.NOT_STARTED,
+          completedAt: null,
+          lastOpenedAt: firstUnitId ? new Date() : state.lastOpenedAt,
+        },
+      });
+    }
   }
 
   await initializeUnitStates(userId, assignmentId, state.currentUnitId);
@@ -614,7 +702,9 @@ export async function completeUnitForUser(
       throw new UnauthorizedTransitionError('Assignment state is not initialized.');
     }
 
-    if (assignmentState.currentUnitId !== unitId) {
+    const allowsOutOfOrderCompletion = fromPrismaTaskType(unit.assignment.taskType) === 'essay';
+
+    if (!allowsOutOfOrderCompletion && assignmentState.currentUnitId !== unitId) {
       throw new UnauthorizedTransitionError('You can only complete the currently active unit.');
     }
 
@@ -672,13 +762,31 @@ export async function completeUnitForUser(
         .map((entry) => entry.unitId),
     );
 
-    const nextUnit = unit.assignment.units.find(
-      (candidate) => candidate.orderIndex > unit.orderIndex && !completedSet.has(candidate.id),
-    );
+    const nextUnit = allowsOutOfOrderCompletion
+      ? unit.assignment.units.find((candidate) => !completedSet.has(candidate.id))
+      : unit.assignment.units.find(
+          (candidate) => candidate.orderIndex > unit.orderIndex && !completedSet.has(candidate.id),
+        );
 
     let nextAssignmentStatus: PrismaUserAssignmentStatus = UserAssignmentStatus.COMPLETED;
     if (nextUnit) {
       nextAssignmentStatus = UserAssignmentStatus.IN_PROGRESS;
+      await tx.userUnitState.updateMany({
+        where: {
+          userId,
+          status: UserUnitStatus.ACTIVE,
+          unitId: {
+            not: nextUnit.id,
+          },
+          unit: {
+            assignmentId: unit.assignmentId,
+          },
+        },
+        data: {
+          status: UserUnitStatus.UNREAD,
+        },
+      });
+
       await tx.userUnitState.upsert({
         where: {
           userId_unitId: {

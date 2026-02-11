@@ -33,15 +33,15 @@ describe('sortAssignmentsByDeadline', () => {
 });
 
 describe('canCompleteUnit', () => {
-  it('requires confirmed thesis for thesis unit', () => {
+  it('requires thesis text length for thesis unit', () => {
     const rejected = canCompleteUnit({
       unitType: 'thesis',
-      content: { thesis: 'Too short', confirmed: false },
+      content: { thesis: 'Too short' },
     });
 
     const accepted = canCompleteUnit({
       unitType: 'thesis',
-      content: { thesis: 'This thesis is long enough and confirmed.', confirmed: true },
+      content: { thesis: 'This thesis is long enough for completion.' },
     });
 
     expect(rejected.ok).toBe(false);
@@ -52,6 +52,35 @@ describe('canCompleteUnit', () => {
     const accepted = canCompleteUnit({
       unitType: 'reading',
       content: null,
+    });
+
+    expect(accepted.ok).toBe(true);
+  });
+
+  it('accepts outline units with sections without confirmation', () => {
+    const accepted = canCompleteUnit({
+      unitType: 'outline',
+      content: {
+        sections: [{ id: 'intro', title: 'Intro', guidingQuestion: 'Why now?', targetWords: 100 }],
+      },
+    });
+
+    expect(accepted.ok).toBe(true);
+  });
+
+  it('accepts writing units with draft text only', () => {
+    const accepted = canCompleteUnit({
+      unitType: 'writing',
+      content: { text: 'This is a complete draft paragraph for the section.' },
+    });
+
+    expect(accepted.ok).toBe(true);
+  });
+
+  it('accepts revise units without confirmation', () => {
+    const accepted = canCompleteUnit({
+      unitType: 'revise',
+      content: { revisionText: 'Final revised draft.' },
     });
 
     expect(accepted.ok).toBe(true);
