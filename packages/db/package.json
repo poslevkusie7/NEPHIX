@@ -9,9 +9,9 @@
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "db:generate": "set -a; [ -f ../../.env ] && . ../../.env; set +a; pnpm exec prisma generate",
-    "db:migrate": "set -a; [ -f ../../.env ] && . ../../.env; set +a; pnpm exec prisma migrate deploy",
-    "db:seed": "set -a; [ -f ../../.env ] && . ../../.env; set +a; pnpm db:generate && pnpm exec tsx src/seed.ts"
+    "db:generate": "if [ -z \"$DATABASE_URL\" ]; then set -a; [ -f ../../.env ] && . ../../.env; set +a; fi; pnpm exec prisma generate",
+    "db:migrate": "if [ -z \"$DATABASE_URL\" ]; then set -a; [ -f ../../.env ] && . ../../.env; set +a; fi; pnpm exec prisma migrate deploy",
+    "db:seed": "if [ -z \"$DATABASE_URL\" ]; then set -a; [ -f ../../.env ] && . ../../.env; set +a; fi; pnpm db:generate && pnpm exec tsx src/seed.ts"
   },
   "dependencies": {
     "@nephix/contracts": "workspace:*",
