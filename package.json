@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "dev": "pnpm --filter @nephix/web dev",
-    "build": "pnpm --filter @nephix/web build",
+    "dev": "set -a; [ -f ./.env ] && . ./.env; set +a; pnpm --filter @nephix/web dev",
+    "build": "set -a; [ -f ./.env ] && . ./.env; set +a; pnpm --filter @nephix/web build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test && pnpm test:unit",

@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "set -a; [ -f ../../.env ] && . ../../.env; set +a; next dev",
+    "build": "set -a; [ -f ../../.env ] && . ../../.env; set +a; next build",
+    "start": "set -a; [ -f ../../.env ] && . ../../.env; set +a; next start",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"

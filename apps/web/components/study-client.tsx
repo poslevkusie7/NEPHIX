@@ -626,7 +626,7 @@ export function StudyClient() {
               </p>
             ) : (
               <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-                Essay flow: check "I confirm..." to save this step, then press Next Unit to continue.
+                Essay flow: check &quot;I confirm...&quot; to save this step, then press Next Unit to continue.
               </p>
             )}
 
