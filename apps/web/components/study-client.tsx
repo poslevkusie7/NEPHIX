@@ -118,6 +118,7 @@ export function StudyClient() {
   const [viewUnitId, setViewUnitId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const workspaceRef = useRef<UnitWorkspaceHandle | null>(null);
   const navigationInFlightRef = useRef(false);
 
@@ -311,9 +312,8 @@ export function StudyClient() {
     }
 
     const targetIndex = viewUnitIndex + delta;
-    const shouldAutoCompleteEssayOnForwardNavigation =
-      delta > 0 && assignment?.taskType === 'essay' && currentUnit.id === activeUnitId;
-    if (!shouldAutoCompleteEssayOnForwardNavigation && (targetIndex < 0 || targetIndex >= units.length)) {
+    const shouldAutoCompleteActiveUnitOnForwardNavigation = delta > 0 && currentUnit.id === activeUnitId;
+    if (!shouldAutoCompleteActiveUnitOnForwardNavigation && (targetIndex < 0 || targetIndex >= units.length)) {
       return;
     }
 
@@ -324,7 +324,7 @@ export function StudyClient() {
         return;
       }
 
-      if (shouldAutoCompleteEssayOnForwardNavigation) {
+      if (shouldAutoCompleteActiveUnitOnForwardNavigation) {
         const completed = await completeCurrentUnitAndRefresh();
         if (!completed) {
           return;
@@ -486,18 +486,48 @@ export function StudyClient() {
     router.push('/login');
   }
 
+  async function deleteAccount() {
+    if (deletingAccount) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Delete your account permanently? This will remove all your study progress and cannot be undone.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingAccount(true);
+    setError(null);
+
+    try {
+      const response = await apiFetch('/api/me', { method: 'DELETE' });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        setError(body?.error ?? 'Failed to delete account.');
+        return;
+      }
+      router.push('/login');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete account.');
+    } finally {
+      setDeletingAccount(false);
+    }
+  }
+
   const swipeHandlers = useSwipeNavigation({
     onSwipeLeft: () => {
-      void moveUnit(1);
+      void moveAssignment(-1);
     },
     onSwipeRight: () => {
-      void moveUnit(-1);
-    },
-    onSwipeUp: () => {
       void moveAssignment(1);
     },
+    onSwipeUp: () => {
+      void moveUnit(1);
+    },
     onSwipeDown: () => {
-      void moveAssignment(-1);
+      void moveUnit(-1);
     },
   });
 
@@ -508,13 +538,13 @@ export function StudyClient() {
 
     if (absY > absX && absY > threshold) {
       event.preventDefault();
-      void moveAssignment(event.deltaY > 0 ? 1 : -1);
+      void moveUnit(event.deltaY > 0 ? 1 : -1);
       return;
     }
 
     if (absX > absY && absX > threshold) {
       event.preventDefault();
-      void moveUnit(event.deltaX > 0 ? 1 : -1);
+      void moveAssignment(event.deltaX > 0 ? 1 : -1);
     }
   }
 
@@ -538,11 +568,21 @@ export function StudyClient() {
               {userEmail ? `Signed in as ${userEmail}` : 'Signed in'}
             </p>
           </div>
-          <form onSubmit={logout}>
-            <button type="submit" className="btn">
-              Logout
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => void deleteAccount()}
+              disabled={deletingAccount}
+            >
+              {deletingAccount ? 'Deleting...' : 'Delete Account'}
             </button>
-          </form>
+            <form onSubmit={logout}>
+              <button type="submit" className="btn">
+                Logout
+              </button>
+            </form>
+          </div>
         </div>
       </header>
 
@@ -563,7 +603,7 @@ export function StudyClient() {
             <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                  Assignment {assignmentIndex + 1}/{feed.length} • Swipe up/down for next assignment
+                  Assignment {assignmentIndex + 1}/{feed.length} • Swipe/scroll left-right for next assignment
                 </p>
                 <h2 style={{ margin: '4px 0 0' }}>{assignment.title}</h2>
                 <p className="muted" style={{ margin: '4px 0 0' }}>
@@ -598,12 +638,6 @@ export function StudyClient() {
               <button type="button" className="btn" onClick={() => void moveAssignment(1)}>
                 Next Assignment
               </button>
-              <button type="button" className="btn" onClick={() => void moveUnit(-1)}>
-                Prev Unit
-              </button>
-              <button type="button" className="btn" onClick={() => void moveUnit(1)}>
-                Next Unit
-              </button>
               {currentUnit.unitType === 'reading' ? (
                 <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
                   {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
@@ -626,12 +660,12 @@ export function StudyClient() {
               </p>
             ) : (
               <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-                Essay flow: check &quot;I confirm...&quot; to save this step, then press Next Unit to continue.
+                Essay flow: check &quot;I confirm...&quot; to save this step, then scroll down to continue.
               </p>
             )}
 
             <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-              Unit {viewUnitIndex + 1}/{units.length} • Swipe left/right for next unit
+              Unit {viewUnitIndex + 1}/{units.length} • Swipe/scroll up-down for next unit
             </p>
 
             <div style={{ marginTop: 14 }}>

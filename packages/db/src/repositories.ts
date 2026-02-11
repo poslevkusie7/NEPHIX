@@ -88,6 +88,11 @@ export async function getUserById(id: string) {
   return prisma.user.findUnique({ where: { id } });
 }
 
+export async function deleteUserById(id: string): Promise<boolean> {
+  const result = await prisma.user.deleteMany({ where: { id } });
+  return result.count > 0;
+}
+
 export async function createUser(email: string, passwordHash: string): Promise<AuthUserDTO> {
   const created = await prisma.user.create({
     data: {
