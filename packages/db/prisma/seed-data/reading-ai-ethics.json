@@ -1,0 +1,46 @@
+{
+  "seedKey": "reading-ai-ethics",
+  "title": "Reading: AI Ethics in Daily Systems",
+  "subject": "Technology Ethics",
+  "taskType": "reading",
+  "deadlineISO": "2026-03-06T23:59:00.000Z",
+  "active": true,
+  "units": [
+    {
+      "orderIndex": 0,
+      "unitType": "reading",
+      "title": "Fragment 1: Automation and Risk",
+      "payload": {
+        "text": "Automated systems make high-volume decisions quickly, but speed can hide errors. In domains such as healthcare, hiring, or lending, small model biases may scale into major social harm.",
+        "fragmentLabel": "1/4"
+      }
+    },
+    {
+      "orderIndex": 1,
+      "unitType": "reading",
+      "title": "Fragment 2: Fairness Tradeoffs",
+      "payload": {
+        "text": "Different fairness metrics are often incompatible. Designers must choose which harms to minimize, and those choices are policy decisions, not purely technical ones.",
+        "fragmentLabel": "2/4"
+      }
+    },
+    {
+      "orderIndex": 2,
+      "unitType": "reading",
+      "title": "Fragment 3: Explainability",
+      "payload": {
+        "text": "Explanations help users contest outcomes and build trust. Transparent communication does not require exposing all model internals, but it should clarify inputs, limits, and uncertainty.",
+        "fragmentLabel": "3/4"
+      }
+    },
+    {
+      "orderIndex": 3,
+      "unitType": "reading",
+      "title": "Fragment 4: Governance",
+      "payload": {
+        "text": "Responsible AI requires governance across the lifecycle: data collection, model training, deployment, and monitoring. Continuous audits are essential because context and risks change over time.",
+        "fragmentLabel": "4/4"
+      }
+    }
+  ]
+}

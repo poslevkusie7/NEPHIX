@@ -1,0 +1,46 @@
+{
+  "seedKey": "reading-civic-media",
+  "title": "Reading: Civic Media and Public Opinion",
+  "subject": "Civics",
+  "taskType": "reading",
+  "deadlineISO": "2026-03-03T23:59:00.000Z",
+  "active": true,
+  "units": [
+    {
+      "orderIndex": 0,
+      "unitType": "reading",
+      "title": "Fragment 1: Information and Attention",
+      "payload": {
+        "text": "Public opinion is shaped less by raw facts and more by which issues gain attention. Platforms reward emotionally intense content, so civic priorities can shift before careful deliberation happens.",
+        "fragmentLabel": "1/4"
+      }
+    },
+    {
+      "orderIndex": 1,
+      "unitType": "reading",
+      "title": "Fragment 2: Agenda Setting",
+      "payload": {
+        "text": "When a topic appears repeatedly in major feeds, audiences interpret it as urgent. Agenda setting does not force beliefs directly, but it narrows what people consider politically important.",
+        "fragmentLabel": "2/4"
+      }
+    },
+    {
+      "orderIndex": 2,
+      "unitType": "reading",
+      "title": "Fragment 3: Polarization Dynamics",
+      "payload": {
+        "text": "Recommendation systems can create repeated exposure to similar viewpoints. Over time, this reinforces in-group identity and increases distrust toward institutions or communities seen as outsiders.",
+        "fragmentLabel": "3/4"
+      }
+    },
+    {
+      "orderIndex": 3,
+      "unitType": "reading",
+      "title": "Fragment 4: Media Literacy",
+      "payload": {
+        "text": "Media literacy combines source evaluation, bias detection, and context comparison. These skills reduce misinformation spread and improve the quality of everyday civic decisions.",
+        "fragmentLabel": "4/4"
+      }
+    }
+  ]
+}

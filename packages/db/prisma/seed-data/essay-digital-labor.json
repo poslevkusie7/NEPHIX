@@ -1,0 +1,129 @@
+{
+  "seedKey": "essay-digital-labor",
+  "title": "Essay: Digital Labor and Platform Work",
+  "subject": "Sociology",
+  "taskType": "essay",
+  "deadlineISO": "2026-03-14T23:59:00.000Z",
+  "active": true,
+  "units": [
+    {
+      "orderIndex": 0,
+      "unitType": "thesis",
+      "title": "Pick Ideas (Thesis)",
+      "payload": {
+        "topic": "How platform work changes job security and worker autonomy",
+        "essayType": "interpretive",
+        "wordCount": 950,
+        "deadlineISO": "2026-03-14T23:59:00.000Z"
+      }
+    },
+    {
+      "orderIndex": 1,
+      "unitType": "outline",
+      "title": "Organize (Outline)",
+      "payload": {
+        "sections": [
+          {
+            "id": "intro",
+            "title": "Introduction",
+            "guidingQuestion": "How should platform work be defined in this essay?",
+            "targetWords": 140
+          },
+          {
+            "id": "body-1",
+            "title": "Flexibility Narrative",
+            "guidingQuestion": "Why is flexibility attractive to workers and firms?",
+            "targetWords": 230
+          },
+          {
+            "id": "body-2",
+            "title": "Precarity Costs",
+            "guidingQuestion": "What forms of insecurity emerge in platform labor?",
+            "targetWords": 230
+          },
+          {
+            "id": "body-3",
+            "title": "Regulatory Responses",
+            "guidingQuestion": "Which policy tools can improve worker protections?",
+            "targetWords": 210
+          },
+          {
+            "id": "conclusion",
+            "title": "Conclusion",
+            "guidingQuestion": "What balanced conclusion follows from this analysis?",
+            "targetWords": 140
+          }
+        ]
+      }
+    },
+    {
+      "orderIndex": 2,
+      "unitType": "writing",
+      "title": "Write: Introduction",
+      "targetWords": 140,
+      "payload": {
+        "sectionId": "intro",
+        "sectionTitle": "Introduction",
+        "guidingQuestion": "Introduce topic and thesis clearly.",
+        "targetWords": 140
+      }
+    },
+    {
+      "orderIndex": 3,
+      "unitType": "writing",
+      "title": "Write: Flexibility Narrative",
+      "targetWords": 230,
+      "payload": {
+        "sectionId": "body-1",
+        "sectionTitle": "Flexibility Narrative",
+        "guidingQuestion": "Analyze how flexibility is framed publicly.",
+        "targetWords": 230
+      }
+    },
+    {
+      "orderIndex": 4,
+      "unitType": "writing",
+      "title": "Write: Precarity Costs",
+      "targetWords": 230,
+      "payload": {
+        "sectionId": "body-2",
+        "sectionTitle": "Precarity Costs",
+        "guidingQuestion": "Discuss instability and hidden labor costs.",
+        "targetWords": 230
+      }
+    },
+    {
+      "orderIndex": 5,
+      "unitType": "writing",
+      "title": "Write: Regulatory Responses",
+      "targetWords": 210,
+      "payload": {
+        "sectionId": "body-3",
+        "sectionTitle": "Regulatory Responses",
+        "guidingQuestion": "Compare policy options and tradeoffs.",
+        "targetWords": 210
+      }
+    },
+    {
+      "orderIndex": 6,
+      "unitType": "writing",
+      "title": "Write: Conclusion",
+      "targetWords": 140,
+      "payload": {
+        "sectionId": "conclusion",
+        "sectionTitle": "Conclusion",
+        "guidingQuestion": "Conclude with balanced policy and social perspective.",
+        "targetWords": 140
+      }
+    },
+    {
+      "orderIndex": 7,
+      "unitType": "revise",
+      "title": "Revise and Polish",
+      "payload": {
+        "focuses": ["clarity", "structure", "argument", "word_balance"],
+        "targetWordCount": 950
+      }
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "seedKey": "essay-climate-policy",
+  "title": "Essay: Climate Policy and Urban Transport",
+  "subject": "Public Policy",
+  "taskType": "essay",
+  "deadlineISO": "2026-03-10T23:59:00.000Z",
+  "active": true,
+  "units": [
+    {
+      "orderIndex": 0,
+      "unitType": "thesis",
+      "title": "Pick Ideas (Thesis)",
+      "payload": {
+        "topic": "How cities should balance transit policy and emissions goals",
+        "essayType": "analytical",
+        "wordCount": 900,
+        "deadlineISO": "2026-03-10T23:59:00.000Z"
+      }
+    },
+    {
+      "orderIndex": 1,
+      "unitType": "outline",
+      "title": "Organize (Outline)",
+      "payload": {
+        "sections": [
+          {
+            "id": "intro",
+            "title": "Introduction",
+            "guidingQuestion": "What urban transport challenge does the essay address?",
+            "targetWords": 130
+          },
+          {
+            "id": "body-1",
+            "title": "Policy Option A",
+            "guidingQuestion": "What are strengths and weaknesses of expanding public transit?",
+            "targetWords": 230
+          },
+          {
+            "id": "body-2",
+            "title": "Policy Option B",
+            "guidingQuestion": "How do pricing tools change commuter behavior?",
+            "targetWords": 230
+          },
+          {
+            "id": "body-3",
+            "title": "Equity Impacts",
+            "guidingQuestion": "Which groups benefit or face tradeoffs under each option?",
+            "targetWords": 180
+          },
+          {
+            "id": "conclusion",
+            "title": "Conclusion",
+            "guidingQuestion": "Which policy mix should be prioritized and why?",
+            "targetWords": 130
+          }
+        ]
+      }
+    },
+    {
+      "orderIndex": 2,
+      "unitType": "writing",
+      "title": "Write: Introduction",
+      "targetWords": 130,
+      "payload": {
+        "sectionId": "intro",
+        "sectionTitle": "Introduction",
+        "guidingQuestion": "Frame the policy problem and thesis.",
+        "targetWords": 130
+      }
+    },
+    {
+      "orderIndex": 3,
+      "unitType": "writing",
+      "title": "Write: Policy Option A",
+      "targetWords": 230,
+      "payload": {
+        "sectionId": "body-1",
+        "sectionTitle": "Policy Option A",
+        "guidingQuestion": "Evaluate benefits and constraints with evidence.",
+        "targetWords": 230
+      }
+    },
+    {
+      "orderIndex": 4,
+      "unitType": "writing",
+      "title": "Write: Policy Option B",
+      "targetWords": 230,
+      "payload": {
+        "sectionId": "body-2",
+        "sectionTitle": "Policy Option B",
+        "guidingQuestion": "Assess expected behavioral and emissions effects.",
+        "targetWords": 230
+      }
+    },
+    {
+      "orderIndex": 5,
+      "unitType": "writing",
+      "title": "Write: Equity Impacts",
+      "targetWords": 180,
+      "payload": {
+        "sectionId": "body-3",
+        "sectionTitle": "Equity Impacts",
+        "guidingQuestion": "Compare fairness impacts across population groups.",
+        "targetWords": 180
+      }
+    },
+    {
+      "orderIndex": 6,
+      "unitType": "writing",
+      "title": "Write: Conclusion",
+      "targetWords": 130,
+      "payload": {
+        "sectionId": "conclusion",
+        "sectionTitle": "Conclusion",
+        "guidingQuestion": "Synthesize argument and policy recommendation.",
+        "targetWords": 130
+      }
+    },
+    {
+      "orderIndex": 7,
+      "unitType": "revise",
+      "title": "Revise and Polish",
+      "payload": {
+        "focuses": ["clarity", "structure", "evidence", "word_balance"],
+        "targetWordCount": 900
+      }
+    }
+  ]
+}
