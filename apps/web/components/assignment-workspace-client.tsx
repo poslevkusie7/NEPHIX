@@ -380,10 +380,6 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
             />
           </div>
 
-          <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-            Each unit is a post. Scroll up/down through this assignment feed.
-          </p>
-
           <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
             {units.map((unit, index) => {
               const unitState = stateByUnit.get(unit.id);
@@ -452,11 +448,8 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
 
           <div
             className="row mobile-stack"
-            style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}
+            style={{ justifyContent: 'flex-end', alignItems: 'center', marginTop: 16 }}
           >
-            <p className="muted" style={{ margin: 0 }}>
-              Save each post to update progress. Finish unlocks at 100%.
-            </p>
             <button
               type="button"
               className="btn btn-primary"
@@ -885,7 +878,6 @@ function UnitWorkspace({
           value={revisionText}
           onChange={(event) => updateContent({ revisionText: event.target.value })}
           style={{ minHeight: 220 }}
-          disabled={!isEditable}
         />
       </label>
 
@@ -951,7 +943,7 @@ function UnitWorkspace({
           }}
           disabled={!isEditable}
         />
-        <span>I confirm revision is complete for this assignment.</span>
+        <span>Confirm completion</span>
       </label>
       <div className="row" style={{ alignItems: 'center' }}>
         <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
