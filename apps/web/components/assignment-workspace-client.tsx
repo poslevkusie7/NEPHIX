@@ -280,7 +280,14 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   }
 
   async function finishAssignment() {
-    if (!allUnitsCompleted || finishingAssignment) {
+    if (finishingAssignment) {
+      return;
+    }
+
+    if (!allUnitsCompleted) {
+      const message = "You haven't completed the assignment fully.";
+      setError(message);
+      window.alert(message);
       return;
     }
 
@@ -388,7 +395,11 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
               const isEditable = true;
               const isBookmarkTarget = bookmarkUnitId === unit.id;
               const postTitle =
-                unit.unitType === 'writing' ? unit.title.replace(/^Write:\s*/i, '') : unit.title;
+                unit.unitType === 'writing'
+                  ? unit.title.replace(/^Write:\s*/i, '')
+                  : unit.unitType === 'outline'
+                    ? 'Outline'
+                    : unit.title;
 
               return (
                 <article
@@ -454,7 +465,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
               type="button"
               className="btn btn-primary"
               onClick={() => void finishAssignment()}
-              disabled={!allUnitsCompleted || finishingAssignment}
+              disabled={finishingAssignment}
             >
               {finishingAssignment
                 ? 'Finishing...'
