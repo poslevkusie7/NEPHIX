@@ -636,6 +636,7 @@ function UnitWorkspace({
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [writingHintBusy, setWritingHintBusy] = useState(false);
   const [revisionPasses, setRevisionPasses] = useState<RevisionPassResult[]>([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   useEffect(() => {
     if (initializedUnitRef.current === unit.id) {
@@ -680,6 +681,7 @@ function UnitWorkspace({
         : [],
     );
     setRevisionPasses([]);
+    setIsChatOpen(false);
   }, [unit.id, unit.unitType, unit.payload, unitState?.content]);
 
   useEffect(() => {
@@ -839,63 +841,97 @@ function UnitWorkspace({
         >
           {text}
         </div>
-        <div
-          style={{
-            border: '1px solid #dbe3ec',
-            borderRadius: 12,
-            padding: 10,
-            display: 'grid',
-            gap: 8,
-            background: '#f8fafc',
-          }}
-        >
-          <p className="muted" style={{ margin: 0 }}>
-            Clarification chat (unit-scoped)
-          </p>
-          <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflow: 'auto' }}>
-            {chatTurns.length === 0 ? (
-              <p className="muted" style={{ margin: 0 }}>
-                Ask a short question about this fragment.
-              </p>
-            ) : (
-              chatTurns.map((turn) => (
-                <div key={turn.id} style={{ display: 'grid', gap: 4 }}>
-                  <p style={{ margin: 0, fontWeight: 600 }}>You: {turn.userMessage}</p>
-                  <p style={{ margin: 0 }}>AI: {turn.assistantMessage}</p>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="row mobile-stack">
-            <input
-              value={chatMessage}
-              onChange={(event) => setChatMessage(event.target.value)}
-              placeholder="Ask for clarification on this text..."
-              disabled={chatBusy}
-            />
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={chatBusy || chatMessage.trim().length === 0}
-              onClick={async () => {
-                const message = chatMessage.trim();
-                if (!message) {
-                  return;
-                }
-                setChatBusy(true);
-                try {
-                  const turn = await onUnitChat(unit.id, message);
-                  setChatTurns((prev) => [...prev, turn]);
-                  setChatMessage('');
-                } finally {
-                  setChatBusy(false);
-                }
+        <div className="row mobile-stack">
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setIsChatOpen(true)}>
+            Open Chat
+          </button>
+        </div>
+        {isChatOpen ? (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(15, 23, 42, 0.45)',
+              zIndex: 70,
+              display: 'grid',
+              placeItems: 'center',
+              padding: 16,
+            }}
+          >
+            <div
+              className="panel"
+              style={{
+                width: 'min(720px, 100%)',
+                maxHeight: '80vh',
+                display: 'grid',
+                gap: 10,
+                padding: 14,
               }}
             >
-              {chatBusy ? 'Sending...' : 'Ask'}
-            </button>
+              <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong>Clarification Chat</strong>
+                <button type="button" className="btn btn-sm" onClick={() => setIsChatOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <p className="muted" style={{ margin: 0 }}>
+                Ask about this reading fragment only.
+              </p>
+              <div style={{ display: 'grid', gap: 6, maxHeight: '45vh', overflow: 'auto' }}>
+                {chatTurns.length === 0 ? (
+                  <p className="muted" style={{ margin: 0 }}>
+                    Ask a short question about this fragment.
+                  </p>
+                ) : (
+                  chatTurns.map((turn) => (
+                    <div
+                      key={turn.id}
+                      style={{
+                        display: 'grid',
+                        gap: 4,
+                        border: '1px solid #dbe3ec',
+                        borderRadius: 10,
+                        padding: 8,
+                      }}
+                    >
+                      <p style={{ margin: 0, fontWeight: 600 }}>You: {turn.userMessage}</p>
+                      <p style={{ margin: 0 }}>AI: {turn.assistantMessage}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="row mobile-stack">
+                <input
+                  value={chatMessage}
+                  onChange={(event) => setChatMessage(event.target.value)}
+                  placeholder="Ask for clarification on this text..."
+                  disabled={chatBusy}
+                />
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={chatBusy || chatMessage.trim().length === 0}
+                  onClick={async () => {
+                    const message = chatMessage.trim();
+                    if (!message) {
+                      return;
+                    }
+                    setChatBusy(true);
+                    try {
+                      const turn = await onUnitChat(unit.id, message);
+                      setChatTurns((prev) => [...prev, turn]);
+                      setChatMessage('');
+                    } finally {
+                      setChatBusy(false);
+                    }
+                  }}
+                >
+                  {chatBusy ? 'Sending...' : 'Ask'}
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        ) : null}
         <button
           type="button"
           className="btn btn-sm"

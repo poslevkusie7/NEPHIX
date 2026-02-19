@@ -15,6 +15,94 @@ function assignmentStatusLabel(status: AssignmentSummaryDTO['status']): string {
   return 'Not started';
 }
 
+function feedStatusForDisplay(assignment: AssignmentSummaryDTO): AssignmentSummaryDTO['status'] {
+  if (assignment.totalUnits > 0 && assignment.completedUnits >= assignment.totalUnits) {
+    return 'completed';
+  }
+  return assignment.status;
+}
+
+function AssignmentCard({ assignment }: { assignment: AssignmentSummaryDTO }) {
+  const status = feedStatusForDisplay(assignment);
+  const progress =
+    assignment.totalUnits > 0
+      ? Math.round((assignment.completedUnits / assignment.totalUnits) * 100)
+      : 0;
+
+  return (
+    <Link
+      href={`/study/${assignment.id}`}
+      className="panel"
+      style={{
+        textDecoration: 'none',
+        color: 'inherit',
+        padding: 14,
+        display: 'block',
+      }}
+    >
+      <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+        {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
+      </p>
+      <h2 style={{ margin: '6px 0 0' }}>{assignment.title}</h2>
+      <p className="muted" style={{ margin: '6px 0 0' }}>
+        {assignmentStatusLabel(status)} • {assignment.completedUnits}/{assignment.totalUnits} posts complete
+      </p>
+      <div
+        style={{
+          marginTop: 10,
+          height: 8,
+          borderRadius: 999,
+          background: '#e2e8f0',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: `${progress}%`,
+            background: '#0f766e',
+            height: '100%',
+          }}
+        />
+      </div>
+    </Link>
+  );
+}
+
+function FeedSections({ feed }: { feed: AssignmentSummaryDTO[] }) {
+  const active = feed.filter((assignment) => feedStatusForDisplay(assignment) !== 'completed');
+  const completed = feed.filter((assignment) => feedStatusForDisplay(assignment) === 'completed');
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <p className="muted" style={{ margin: 0, fontSize: 12, textTransform: 'uppercase', fontWeight: 700 }}>
+          Active Assignments
+        </p>
+        {active.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>
+            No active assignments.
+          </p>
+        ) : (
+          active.map((assignment) => <AssignmentCard key={assignment.id} assignment={assignment} />)
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gap: 12 }}>
+        <p className="muted" style={{ margin: 0, fontSize: 12, textTransform: 'uppercase', fontWeight: 700 }}>
+          Completed Assignments
+        </p>
+        {completed.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>
+            No completed assignments yet.
+          </p>
+        ) : (
+          completed.map((assignment) => <AssignmentCard key={assignment.id} assignment={assignment} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function AssignmentFeedClient() {
   const router = useRouter();
 
@@ -172,52 +260,7 @@ export function AssignmentFeedClient() {
               No assignments found. Seed data and refresh.
             </p>
           ) : (
-            <div style={{ display: 'grid', gap: 12 }}>
-              {feed.map((assignment) => {
-                const progress =
-                  assignment.totalUnits > 0
-                    ? Math.round((assignment.completedUnits / assignment.totalUnits) * 100)
-                    : 0;
-                return (
-                  <Link
-                    key={assignment.id}
-                    href={`/study/${assignment.id}`}
-                    className="panel"
-                    style={{
-                      textDecoration: 'none',
-                      color: 'inherit',
-                      padding: 14,
-                      display: 'block',
-                    }}
-                  >
-                    <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                      {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
-                    </p>
-                    <h2 style={{ margin: '6px 0 0' }}>{assignment.title}</h2>
-                    <p className="muted" style={{ margin: '6px 0 0' }}>
-                      {assignmentStatusLabel(assignment.status)} • {assignment.completedUnits}/{assignment.totalUnits} posts complete
-                    </p>
-                    <div
-                      style={{
-                        marginTop: 10,
-                        height: 8,
-                        borderRadius: 999,
-                        background: '#e2e8f0',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${progress}%`,
-                          background: '#0f766e',
-                          height: '100%',
-                        }}
-                      />
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
+            <FeedSections feed={feed} />
           )}
         </section>
 

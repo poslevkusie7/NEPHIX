@@ -521,18 +521,24 @@ export async function listFeedForUser(userId: string): Promise<AssignmentSummary
 
   const mapped: AssignmentSummaryDTO[] = assignments.map((assignment) => {
     const currentState = assignment.assignmentState[0] ?? null;
+    const completedUnits = completedByAssignment.get(assignment.id) ?? 0;
+    const totalUnits = assignment.units.length;
+    const isFullyCompleted = totalUnits > 0 && completedUnits >= totalUnits;
+
     return {
       id: assignment.id,
       title: assignment.title,
       subject: assignment.subject,
       taskType: fromPrismaTaskType(assignment.taskType),
       deadlineISO: assignment.deadline.toISOString(),
-      status: currentState
-        ? fromPrismaAssignmentStatus(currentState.status)
-        : ('not_started' as const),
-      currentUnitId: currentState?.currentUnitId ?? null,
-      totalUnits: assignment.units.length,
-      completedUnits: completedByAssignment.get(assignment.id) ?? 0,
+      status: isFullyCompleted
+        ? 'completed'
+        : currentState
+          ? fromPrismaAssignmentStatus(currentState.status)
+          : ('not_started' as const),
+      currentUnitId: isFullyCompleted ? null : currentState?.currentUnitId ?? null,
+      totalUnits,
+      completedUnits,
     };
   });
 
