@@ -1,5 +1,55 @@
 import type { ThesisSuggestion } from '@nephix/contracts';
 
+const MEANINGFUL_TOKEN_STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'the',
+  'of',
+  'to',
+  'in',
+  'on',
+  'for',
+  'with',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'this',
+  'that',
+  'it',
+  'as',
+  'by',
+  'at',
+  'from',
+  'or',
+  'but',
+  'can',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'whom',
+  'whose',
+  'why',
+  'how',
+  'explain',
+  'mean',
+  'means',
+  'word',
+  'phrase',
+  'fragment',
+  'section',
+  'part',
+  'context',
+  'used',
+  'here',
+]);
+
 function normalizeToken(token: string): string {
   let normalized = token.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (normalized.endsWith('ies') && normalized.length > 4) {
@@ -24,57 +74,10 @@ function normalizeToken(token: string): string {
 }
 
 function tokenizeMeaningful(text: string): string[] {
-  const stopwords = new Set([
-    'a',
-    'an',
-    'and',
-    'the',
-    'of',
-    'to',
-    'in',
-    'on',
-    'for',
-    'with',
-    'is',
-    'are',
-    'was',
-    'were',
-    'be',
-    'been',
-    'being',
-    'this',
-    'that',
-    'it',
-    'as',
-    'by',
-    'at',
-    'from',
-    'or',
-    'but',
-    'can',
-    'what',
-    'when',
-    'where',
-    'which',
-    'who',
-    'whom',
-    'whose',
-    'why',
-    'how',
-    'explain',
-    'mean',
-    'means',
-    'word',
-    'phrase',
-    'fragment',
-    'section',
-    'part',
-  ]);
-
   return text
     .split(/\s+/)
     .map(normalizeToken)
-    .filter((token) => token.length > 2 && !stopwords.has(token));
+    .filter((token) => token.length > 2 && !MEANINGFUL_TOKEN_STOPWORDS.has(token));
 }
 
 export function countSentences(text: string): number {
@@ -149,19 +152,40 @@ function selectRelevantSentence(sourceText: string, question: string): string | 
   return truncateText(bestSentence, 180);
 }
 
+function extractFocusTerm(question: string): string | null {
+  const quoted = question.match(/["“”'‘’]([^"“”'‘’]{2,64})["“”'‘’]/);
+  if (quoted?.[1]) {
+    const cleanedQuoted = quoted[1].trim().replace(/\s+/g, ' ');
+    return cleanedQuoted.length > 1 ? cleanedQuoted : null;
+  }
+
+  const parts = question.split(/\s+/);
+  for (const part of parts) {
+    const cleaned = part.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+    if (cleaned.length < 3) {
+      continue;
+    }
+    if (MEANINGFUL_TOKEN_STOPWORDS.has(cleaned.toLowerCase())) {
+      continue;
+    }
+    return cleaned;
+  }
+
+  return null;
+}
+
 function buildClarificationFallback(sourceText: string, question: string): string {
   const relevantSentence = selectRelevantSentence(sourceText, question);
-  const questionTokens = tokenizeMeaningful(question);
-  const focus = questionTokens[0];
+  const focus = extractFocusTerm(question);
 
   if (relevantSentence && focus) {
-    return `In this fragment, "${relevantSentence}" is the relevant line. Here, "${focus}" is used in that context.`;
+    return `"${focus}" in this unit means the idea shown in: "${relevantSentence}".`;
   }
   if (relevantSentence) {
-    return `In this fragment, "${relevantSentence}" is the key line for your question.`;
+    return `Key context line: "${relevantSentence}". Ask about one word and I will define it.`;
   }
 
-  return 'Ask about one specific word or sentence in this fragment, and I will explain it directly.';
+  return 'Ask about one specific word, and I will define it in this unit context.';
 }
 
 function looksLikeGenericRefusal(answer: string): boolean {

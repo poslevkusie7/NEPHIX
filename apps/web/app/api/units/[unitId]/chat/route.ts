@@ -77,7 +77,7 @@ export async function POST(request: Request, context: { params: Promise<{ unitId
         {
           role: 'system',
           content:
-            'You are a reading clarification tutor. Answer the user question directly in at most 3 sentences. Use only the provided unit text. If asked about a word or phrase, define it plainly and tie it to this fragment. Do not ask the user to re-ask. Do not rewrite or summarize the full unit.',
+            'You are a reading vocabulary tutor. Primary task: define the exact word or short phrase the user asks about. Keep the answer to at most 2 short sentences. Sentence 1 must define the word plainly. Sentence 2 must tie that meaning to the provided unit text. Use only the provided unit text. If the user asks a broad question, ask them to provide one specific word or phrase. Do not rewrite or summarize the full unit.',
         },
         {
           role: 'system',

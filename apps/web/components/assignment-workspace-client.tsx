@@ -165,12 +165,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
         ? activeUnitId
         : readingUnits[0]?.id ?? null;
 
-    setReadingChatUnitId((previous) => {
-      if (previous && readingUnits.some((unit) => unit.id === previous)) {
-        return previous;
-      }
-      return preferredUnitId;
-    });
+    setReadingChatUnitId(preferredUnitId);
   }, [activeUnitId, readingUnits]);
 
   useEffect(() => {
@@ -620,28 +615,9 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                   </button>
                 </div>
                 <p className="muted" style={{ margin: 0 }}>
-                  Ask about this reading assignment.
+                  Ask about one word or short phrase from the current reading unit. The chat explains meaning in
+                  context.
                 </p>
-                {readingUnits.length > 1 ? (
-                  <label className="field" style={{ marginTop: 10 }}>
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      Fragment
-                    </span>
-                    <select
-                      value={selectedReadingUnit.id}
-                      onChange={(event) => {
-                        setReadingChatUnitId(event.target.value);
-                      }}
-                      disabled={readingChatLoading || readingChatBusy}
-                    >
-                      {readingUnits.map((unit, index) => (
-                        <option key={unit.id} value={unit.id}>
-                          Post {index + 1}: {unit.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
 
                 <div
                   ref={readingChatScrollRef}
@@ -667,7 +643,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                   ) : null}
                   {!readingChatLoading && readingChatTurns.length === 0 ? (
                     <p className="muted" style={{ margin: 0 }}>
-                      Ask a short question about this fragment.
+                      Ask about one word, for example: What does &quot;alienation&quot; mean here?
                     </p>
                   ) : (
                     readingChatTurns.map((turn) => (
