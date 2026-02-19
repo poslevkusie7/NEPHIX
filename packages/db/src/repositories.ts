@@ -1,5 +1,9 @@
 import type {
   Prisma,
+  UnitType as PrismaUnitTypeValue,
+  ScheduleGoalType as PrismaScheduleGoalType,
+  ScheduleItemStatus as PrismaScheduleItemStatus,
+  UserInteractionEventType as PrismaUserInteractionEventType,
   UserAssignmentStatus as PrismaUserAssignmentStatus,
   UserUnitStatus as PrismaUserUnitStatus,
 } from '@prisma/client';
@@ -10,8 +14,11 @@ import type {
   AuthUserDTO,
   BookmarkedReadingUnitDTO,
   BookmarkUnitRequest,
+  ClarificationTurn,
   CompleteUnitResponse,
   PatchUnitStateRequest,
+  ScheduleGoal,
+  ThesisSuggestion,
   UserUnitStateDTO,
 } from '@nephix/contracts';
 import { canCompleteUnit, sortAssignmentsByDeadline } from '@nephix/domain';
@@ -24,7 +31,10 @@ import {
   toPrismaUnitStatus,
 } from './mappers';
 import {
+  ScheduleGoalType,
+  ScheduleItemStatus,
   UnitType as PrismaUnitType,
+  UserInteractionEventType,
   UserAssignmentStatus,
   UserUnitStatus,
 } from './prisma-runtime';
@@ -77,6 +87,139 @@ function mapAuthUser(user: { id: string; email: string; createdAt: Date }): Auth
   };
 }
 
+function toEffectiveStatus(status: PrismaUserUnitStatus, bookmarked: boolean): UserUnitStateDTO['effectiveStatus'] {
+  if (bookmarked) {
+    return 'bookmarked';
+  }
+  return fromPrismaUnitStatus(status);
+}
+
+function toInteractionEventType(
+  value:
+    | 'unit_opened'
+    | 'unit_completed'
+    | 'bookmark_toggled'
+    | 'chat_used'
+    | 'hint_used'
+    | 'issue_postponed'
+    | 'issue_resolved',
+): PrismaUserInteractionEventType {
+  switch (value) {
+    case 'unit_opened':
+      return UserInteractionEventType.UNIT_OPENED;
+    case 'unit_completed':
+      return UserInteractionEventType.UNIT_COMPLETED;
+    case 'bookmark_toggled':
+      return UserInteractionEventType.BOOKMARK_TOGGLED;
+    case 'chat_used':
+      return UserInteractionEventType.CHAT_USED;
+    case 'hint_used':
+      return UserInteractionEventType.HINT_USED;
+    case 'issue_postponed':
+      return UserInteractionEventType.ISSUE_POSTPONED;
+    case 'issue_resolved':
+      return UserInteractionEventType.ISSUE_RESOLVED;
+  }
+}
+
+function toScheduleGoalType(
+  value: 'sources' | 'thesis' | 'outline' | 'writing' | 'revise',
+): PrismaScheduleGoalType {
+  switch (value) {
+    case 'sources':
+      return ScheduleGoalType.SOURCES;
+    case 'thesis':
+      return ScheduleGoalType.THESIS;
+    case 'outline':
+      return ScheduleGoalType.OUTLINE;
+    case 'writing':
+      return ScheduleGoalType.WRITING;
+    case 'revise':
+      return ScheduleGoalType.REVISE;
+  }
+}
+
+function fromScheduleGoalType(value: PrismaScheduleGoalType): ScheduleGoal['goalType'] {
+  switch (value) {
+    case ScheduleGoalType.SOURCES:
+      return 'sources';
+    case ScheduleGoalType.THESIS:
+      return 'thesis';
+    case ScheduleGoalType.OUTLINE:
+      return 'outline';
+    case ScheduleGoalType.WRITING:
+      return 'writing';
+    case ScheduleGoalType.REVISE:
+      return 'revise';
+  }
+}
+
+function fromScheduleItemStatus(value: PrismaScheduleItemStatus): ScheduleGoal['status'] {
+  switch (value) {
+    case ScheduleItemStatus.PENDING:
+      return 'pending';
+    case ScheduleItemStatus.DONE:
+      return 'done';
+    case ScheduleItemStatus.SKIPPED:
+      return 'skipped';
+  }
+}
+
+function getContentConfirmed(content: Prisma.JsonValue | null | undefined): boolean {
+  const record = jsonToRecord(content ?? null);
+  return Boolean(record?.confirmed);
+}
+
+type UnitRowForWarnings = {
+  id: string;
+  unitType: PrismaUnitTypeValue;
+  orderIndex: number;
+};
+
+function buildReadinessWarningsForUnit(
+  unit: UnitRowForWarnings,
+  assignmentUnits: UnitRowForWarnings[],
+  stateByUnitId: Map<string, { status: PrismaUserUnitStatus; content: Prisma.JsonValue | null }>,
+): string[] {
+  const warnings: string[] = [];
+
+  const thesisUnit = assignmentUnits.find((entry) => entry.unitType === PrismaUnitType.THESIS);
+  const outlineUnit = assignmentUnits.find((entry) => entry.unitType === PrismaUnitType.OUTLINE);
+  const writingUnits = assignmentUnits.filter((entry) => entry.unitType === PrismaUnitType.WRITING);
+
+  const thesisConfirmed = thesisUnit
+    ? getContentConfirmed(stateByUnitId.get(thesisUnit.id)?.content ?? null)
+    : true;
+  const outlineConfirmed = outlineUnit
+    ? getContentConfirmed(stateByUnitId.get(outlineUnit.id)?.content ?? null)
+    : true;
+
+  if (unit.unitType === PrismaUnitType.OUTLINE && !thesisConfirmed) {
+    warnings.push('Outline is not fully ready: thesis is not confirmed yet.');
+  }
+
+  if (unit.unitType === PrismaUnitType.WRITING) {
+    if (!thesisConfirmed) {
+      warnings.push('Writing started before thesis confirmation.');
+    }
+    if (!outlineConfirmed) {
+      warnings.push('Writing started before outline confirmation.');
+    }
+  }
+
+  if (unit.unitType === PrismaUnitType.REVISE) {
+    const incompleteWriting = writingUnits.filter((entry) => {
+      const state = stateByUnitId.get(entry.id);
+      return state?.status !== UserUnitStatus.COMPLETED;
+    });
+    if (incompleteWriting.length > 0) {
+      warnings.push('Revision started before all writing units were completed.');
+    }
+  }
+
+  return warnings;
+}
+
 function mapUnitState(state: {
   unitId: string;
   status: PrismaUserUnitStatus;
@@ -84,15 +227,46 @@ function mapUnitState(state: {
   content: Prisma.JsonValue | null;
   position: Prisma.JsonValue | null;
   updatedAt: Date;
+  readinessWarnings?: string[];
 }): UserUnitStateDTO {
   return {
     unitId: state.unitId,
     status: fromPrismaUnitStatus(state.status),
+    effectiveStatus: toEffectiveStatus(state.status, state.bookmarked),
     bookmarked: state.bookmarked,
+    readinessWarnings: state.readinessWarnings ?? [],
     content: jsonToRecord(state.content),
     position: jsonToRecord(state.position),
     updatedAtISO: state.updatedAt.toISOString(),
   };
+}
+
+async function createInteractionEvent(
+  db: { userInteractionEvent: { create: (args: Prisma.UserInteractionEventCreateArgs) => Promise<unknown> } },
+  payload: {
+    userId: string;
+    assignmentId: string;
+    unitId?: string | null;
+    eventType:
+      | 'unit_opened'
+      | 'unit_completed'
+      | 'bookmark_toggled'
+      | 'chat_used'
+      | 'hint_used'
+      | 'issue_postponed'
+      | 'issue_resolved';
+    meta?: Record<string, unknown>;
+  },
+) {
+  await db.userInteractionEvent.create({
+    data: {
+      userId: payload.userId,
+      assignmentId: payload.assignmentId,
+      unitId: payload.unitId ?? undefined,
+      eventType: toInteractionEventType(payload.eventType),
+      meta: payload.meta as Prisma.InputJsonValue | undefined,
+    },
+  });
 }
 
 export async function getUserByEmail(email: string) {
@@ -313,6 +487,38 @@ export async function listFeedForUser(userId: string): Promise<AssignmentSummary
     completedByAssignment.set(state.unit.assignmentId, current + 1);
   }
 
+  const lookbackDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const events = await prisma.userInteractionEvent.findMany({
+    where: {
+      userId,
+      assignmentId: {
+        in: assignmentIds,
+      },
+      createdAt: {
+        gte: lookbackDate,
+      },
+    },
+    select: {
+      assignmentId: true,
+      eventType: true,
+    },
+  });
+
+  const eventWeights: Record<PrismaUserInteractionEventType, number> = {
+    UNIT_OPENED: 1,
+    UNIT_COMPLETED: 3,
+    BOOKMARK_TOGGLED: 0.5,
+    CHAT_USED: 1,
+    HINT_USED: 1,
+    ISSUE_POSTPONED: -1,
+    ISSUE_RESOLVED: 2,
+  };
+  const preferenceScores = new Map<string, number>();
+  for (const event of events) {
+    const current = preferenceScores.get(event.assignmentId) ?? 0;
+    preferenceScores.set(event.assignmentId, current + (eventWeights[event.eventType] ?? 0));
+  }
+
   const mapped: AssignmentSummaryDTO[] = assignments.map((assignment) => {
     const currentState = assignment.assignmentState[0] ?? null;
     return {
@@ -330,7 +536,10 @@ export async function listFeedForUser(userId: string): Promise<AssignmentSummary
     };
   });
 
-  return sortAssignmentsByDeadline(mapped);
+  return sortAssignmentsByDeadline(mapped, {
+    comparableDeadlineWindowMs: 48 * 60 * 60 * 1000,
+    preferenceScores,
+  });
 }
 
 export async function listBookmarkedReadingUnitsForUser(
@@ -542,6 +751,7 @@ export async function getAssignmentStateForUser(
       unit: {
         select: {
           orderIndex: true,
+          unitType: true,
         },
       },
     },
@@ -551,6 +761,15 @@ export async function getAssignmentStateForUser(
       },
     },
   });
+
+  const assignmentUnitsForWarnings: UnitRowForWarnings[] = unitStates.map((entry) => ({
+    id: entry.unitId,
+    unitType: entry.unit.unitType,
+    orderIndex: entry.unit.orderIndex,
+  }));
+  const stateByUnitId = new Map(
+    unitStates.map((entry) => [entry.unitId, { status: entry.status, content: entry.content }]),
+  );
 
   return {
     assignmentId,
@@ -564,6 +783,15 @@ export async function getAssignmentStateForUser(
         content: entry.content,
         position: entry.position,
         updatedAt: entry.updatedAt,
+        readinessWarnings: buildReadinessWarningsForUnit(
+          {
+            id: entry.unitId,
+            unitType: entry.unit.unitType,
+            orderIndex: entry.unit.orderIndex,
+          },
+          assignmentUnitsForWarnings,
+          stateByUnitId,
+        ),
       }),
     ),
   };
@@ -634,6 +862,36 @@ export async function patchUnitStateForUser(
     },
   });
 
+  await createInteractionEvent(prisma, {
+    userId,
+    assignmentId: unit.assignmentId,
+    unitId,
+    eventType: 'unit_opened',
+    meta: {
+      patchedKeys: Object.keys(data),
+    },
+  });
+
+  const lastIssueActionRaw =
+    data.content && isRecord(data.content) && isRecord(data.content.lastIssueAction)
+      ? data.content.lastIssueAction
+      : null;
+  const lastIssueActionStatus =
+    typeof lastIssueActionRaw?.status === 'string' ? lastIssueActionRaw.status : null;
+  if (lastIssueActionStatus === 'postponed' || lastIssueActionStatus === 'resolved') {
+    await createInteractionEvent(prisma, {
+      userId,
+      assignmentId: unit.assignmentId,
+      unitId,
+      eventType: lastIssueActionStatus === 'postponed' ? 'issue_postponed' : 'issue_resolved',
+      meta: {
+        issueKey:
+          typeof lastIssueActionRaw?.issueKey === 'string' ? lastIssueActionRaw.issueKey : undefined,
+      },
+    });
+    await recalculateScheduleForAssignment(userId, unit.assignmentId).catch(() => undefined);
+  }
+
   return mapUnitState({
     unitId: saved.unitId,
     status: saved.status,
@@ -641,6 +899,7 @@ export async function patchUnitStateForUser(
     content: saved.content,
     position: saved.position,
     updatedAt: saved.updatedAt,
+    readinessWarnings: [],
   });
 }
 
@@ -648,7 +907,9 @@ export async function completeUnitForUser(
   userId: string,
   unitId: string,
 ): Promise<CompleteUnitResponse> {
-  return prisma.$transaction(async (tx) => {
+  let assignmentIdForSchedule: string | null = null;
+
+  const result = await prisma.$transaction(async (tx) => {
     const unit = await tx.assignmentUnit.findUnique({
       where: { id: unitId },
       include: {
@@ -665,6 +926,7 @@ export async function completeUnitForUser(
     if (!unit || !unit.assignment.active) {
       throw new NotFoundError('Unit not found.');
     }
+    assignmentIdForSchedule = unit.assignmentId;
 
     let assignmentState = await tx.userAssignmentState.findUnique({
       where: {
@@ -753,8 +1015,26 @@ export async function completeUnitForUser(
       select: {
         unitId: true,
         status: true,
+        content: true,
       },
     });
+
+    const unitStatesById = new Map(
+      unitStates.map((entry) => [entry.unitId, { status: entry.status, content: entry.content }]),
+    );
+    const readinessWarnings = buildReadinessWarningsForUnit(
+      {
+        id: unit.id,
+        unitType: unit.unitType,
+        orderIndex: unit.orderIndex,
+      },
+      unit.assignment.units.map((entry) => ({
+        id: entry.id,
+        unitType: entry.unitType,
+        orderIndex: entry.orderIndex,
+      })),
+      unitStatesById,
+    );
 
     const completedSet = new Set(
       unitStates
@@ -820,13 +1100,35 @@ export async function completeUnitForUser(
       },
     });
 
+    await createInteractionEvent(tx, {
+      userId,
+      assignmentId: unit.assignmentId,
+      unitId,
+      eventType: 'unit_completed',
+      meta: {
+        warnings: readinessWarnings,
+      },
+    });
+
+    const assignmentStatus: CompleteUnitResponse['assignmentStatus'] =
+      nextAssignmentStatus === UserAssignmentStatus.COMPLETED ? 'completed' : 'in_progress';
+    const gateStatus: CompleteUnitResponse['gateStatus'] =
+      readinessWarnings.length > 0 ? 'warn' : 'ready';
+
     return {
       completedUnitId: unitId,
       nextUnitId: nextUnit?.id ?? null,
-      assignmentStatus:
-        nextAssignmentStatus === UserAssignmentStatus.COMPLETED ? 'completed' : 'in_progress',
+      assignmentStatus,
+      gateStatus,
+      warnings: readinessWarnings,
     };
   });
+
+  if (assignmentIdForSchedule) {
+    await recalculateScheduleForAssignment(userId, assignmentIdForSchedule).catch(() => undefined);
+  }
+
+  return result;
 }
 
 export async function setUnitBookmarkForUser(
@@ -873,6 +1175,16 @@ export async function setUnitBookmarkForUser(
     },
   });
 
+  await createInteractionEvent(prisma, {
+    userId,
+    assignmentId: unit.assignmentId,
+    unitId,
+    eventType: 'bookmark_toggled',
+    meta: {
+      bookmarked: payload.bookmarked,
+    },
+  });
+
   return mapUnitState({
     unitId: saved.unitId,
     status: saved.status,
@@ -880,6 +1192,7 @@ export async function setUnitBookmarkForUser(
     content: saved.content,
     position: saved.position,
     updatedAt: saved.updatedAt,
+    readinessWarnings: [],
   });
 }
 
@@ -911,9 +1224,358 @@ export async function collectWritingSectionsForAssignment(userId: string, assign
     const content = jsonToRecord(stateMap.get(unit.id)?.content ?? null) ?? {};
     const text = typeof content.text === 'string' ? content.text : '';
     return {
+      unitId: unit.id,
       title: unit.title,
       text,
       targetWords: unit.targetWords ?? 0,
     };
   });
+}
+
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function addUtcDays(base: Date, days: number): Date {
+  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function mapUnitTypeToScheduleGoalType(unitType: PrismaUnitTypeValue): ScheduleGoal['goalType'] {
+  switch (unitType) {
+    case PrismaUnitType.THESIS:
+      return 'thesis';
+    case PrismaUnitType.OUTLINE:
+      return 'outline';
+    case PrismaUnitType.WRITING:
+      return 'writing';
+    case PrismaUnitType.REVISE:
+      return 'revise';
+    case PrismaUnitType.READING:
+      return 'sources';
+  }
+
+  return 'sources';
+}
+
+function mapScheduleItem(item: {
+  id: string;
+  assignmentId: string;
+  dateISO: Date;
+  goalType: PrismaScheduleGoalType;
+  unitId: string | null;
+  targetWords: number | null;
+  status: PrismaScheduleItemStatus;
+  title: string;
+}): ScheduleGoal {
+  return {
+    id: item.id,
+    assignmentId: item.assignmentId,
+    dateISO: item.dateISO.toISOString(),
+    goalType: fromScheduleGoalType(item.goalType),
+    unitId: item.unitId,
+    targetWords: item.targetWords,
+    status: fromScheduleItemStatus(item.status),
+    title: item.title,
+  };
+}
+
+export async function getAssignmentUnitById(unitId: string) {
+  const unit = await prisma.assignmentUnit.findUnique({
+    where: { id: unitId },
+    include: {
+      assignment: {
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          deadline: true,
+          taskType: true,
+          active: true,
+        },
+      },
+    },
+  });
+
+  if (!unit || !unit.assignment.active) {
+    throw new NotFoundError('Unit not found.');
+  }
+
+  return {
+    id: unit.id,
+    assignmentId: unit.assignmentId,
+    unitType: fromPrismaUnitType(unit.unitType),
+    orderIndex: unit.orderIndex,
+    title: unit.title,
+    payload: (jsonToRecord(unit.payload) ?? {}) as Record<string, unknown>,
+    targetWords: unit.targetWords,
+    assignment: {
+      id: unit.assignment.id,
+      title: unit.assignment.title,
+      subject: unit.assignment.subject,
+      deadlineISO: unit.assignment.deadline.toISOString(),
+      taskType: fromPrismaTaskType(unit.assignment.taskType),
+    },
+  };
+}
+
+export async function getUnitStateByIdForUser(userId: string, unitId: string): Promise<UserUnitStateDTO | null> {
+  const unit = await prisma.assignmentUnit.findUnique({
+    where: { id: unitId },
+    select: {
+      assignmentId: true,
+    },
+  });
+  if (!unit) {
+    return null;
+  }
+
+  await ensureAssignmentState(userId, unit.assignmentId);
+  const state = await prisma.userUnitState.findUnique({
+    where: {
+      userId_unitId: {
+        userId,
+        unitId,
+      },
+    },
+  });
+  if (!state) {
+    return null;
+  }
+
+  return mapUnitState({
+    unitId: state.unitId,
+    status: state.status,
+    bookmarked: state.bookmarked,
+    content: state.content,
+    position: state.position,
+    updatedAt: state.updatedAt,
+    readinessWarnings: [],
+  });
+}
+
+export async function saveThesisSuggestionsForUnit(
+  userId: string,
+  unitId: string,
+  suggestions: ThesisSuggestion[],
+): Promise<UserUnitStateDTO> {
+  return patchUnitStateForUser(userId, unitId, {
+    content: {
+      thesisSuggestions: suggestions,
+    },
+  });
+}
+
+export async function createClarificationTurnForUnit(
+  userId: string,
+  unitId: string,
+  userMessage: string,
+  assistantMessage: string,
+): Promise<ClarificationTurn> {
+  const unit = await prisma.assignmentUnit.findUnique({
+    where: { id: unitId },
+    include: {
+      assignment: {
+        select: {
+          id: true,
+          active: true,
+        },
+      },
+    },
+  });
+
+  if (!unit || !unit.assignment.active) {
+    throw new NotFoundError('Unit not found.');
+  }
+
+  const session = await prisma.unitChatSession.upsert({
+    where: {
+      userId_unitId: {
+        userId,
+        unitId,
+      },
+    },
+    create: {
+      userId,
+      unitId,
+    },
+    update: {},
+  });
+
+  const turn = await prisma.unitChatTurn.create({
+    data: {
+      sessionId: session.id,
+      userMessage,
+      assistantMessage,
+    },
+  });
+
+  await createInteractionEvent(prisma, {
+    userId,
+    assignmentId: unit.assignmentId,
+    unitId,
+    eventType: 'chat_used',
+  });
+  await recalculateScheduleForAssignment(userId, unit.assignmentId).catch(() => undefined);
+
+  return {
+    id: turn.id,
+    unitId,
+    userMessage: turn.userMessage,
+    assistantMessage: turn.assistantMessage,
+    createdAtISO: turn.createdAt.toISOString(),
+  };
+}
+
+export async function listClarificationTurnsForUnit(
+  userId: string,
+  unitId: string,
+  limit = 20,
+): Promise<ClarificationTurn[]> {
+  const session = await prisma.unitChatSession.findUnique({
+    where: {
+      userId_unitId: {
+        userId,
+        unitId,
+      },
+    },
+    include: {
+      turns: {
+        orderBy: {
+          createdAt: 'asc',
+        },
+        take: Math.max(1, Math.min(limit, 100)),
+      },
+    },
+  });
+
+  if (!session) {
+    return [];
+  }
+
+  return session.turns.map((turn) => ({
+    id: turn.id,
+    unitId,
+    userMessage: turn.userMessage,
+    assistantMessage: turn.assistantMessage,
+    createdAtISO: turn.createdAt.toISOString(),
+  }));
+}
+
+export async function recordInteractionEvent(payload: {
+  userId: string;
+  assignmentId: string;
+  unitId?: string | null;
+  eventType:
+    | 'unit_opened'
+    | 'unit_completed'
+    | 'bookmark_toggled'
+    | 'chat_used'
+    | 'hint_used'
+    | 'issue_postponed'
+    | 'issue_resolved';
+  meta?: Record<string, unknown>;
+}) {
+  await createInteractionEvent(prisma, payload);
+}
+
+export async function recalculateScheduleForAssignment(
+  userId: string,
+  assignmentId: string,
+): Promise<ScheduleGoal[]> {
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    include: {
+      units: {
+        orderBy: {
+          orderIndex: 'asc',
+        },
+      },
+    },
+  });
+
+  if (!assignment || !assignment.active) {
+    throw new NotFoundError('Assignment not found.');
+  }
+
+  await ensureAssignmentState(userId, assignmentId);
+  const states = await prisma.userUnitState.findMany({
+    where: {
+      userId,
+      unit: {
+        assignmentId,
+      },
+    },
+    select: {
+      unitId: true,
+      status: true,
+    },
+  });
+  const completed = new Set(
+    states.filter((entry) => entry.status === UserUnitStatus.COMPLETED).map((entry) => entry.unitId),
+  );
+
+  const remainingUnits = assignment.units.filter((unit) => !completed.has(unit.id));
+
+  await prisma.userScheduleItem.deleteMany({
+    where: {
+      userId,
+      assignmentId,
+    },
+  });
+
+  if (remainingUnits.length === 0) {
+    return [];
+  }
+
+  const now = new Date();
+  const startDate = startOfUtcDay(now);
+  const endDate = startOfUtcDay(assignment.deadline);
+  const daysRemaining = Math.max(
+    1,
+    Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)) + 1,
+  );
+
+  const itemsData = remainingUnits.map((unit, index) => {
+    const dayOffset = Math.min(daysRemaining - 1, Math.floor((index * daysRemaining) / remainingUnits.length));
+    const dateISO = addUtcDays(startDate, dayOffset);
+    return {
+      userId,
+      assignmentId,
+      dateISO,
+      goalType: toScheduleGoalType(mapUnitTypeToScheduleGoalType(unit.unitType)),
+      unitId: unit.id,
+      targetWords: unit.targetWords,
+      status: ScheduleItemStatus.PENDING,
+      title: unit.title,
+    };
+  });
+
+  await prisma.userScheduleItem.createMany({
+    data: itemsData,
+  });
+
+  const saved = await prisma.userScheduleItem.findMany({
+    where: {
+      userId,
+      assignmentId,
+    },
+    orderBy: [{ dateISO: 'asc' }, { createdAt: 'asc' }],
+  });
+
+  return saved.map((item) =>
+    mapScheduleItem({
+      id: item.id,
+      assignmentId: item.assignmentId,
+      dateISO: item.dateISO,
+      goalType: item.goalType,
+      unitId: item.unitId,
+      targetWords: item.targetWords,
+      status: item.status,
+      title: item.title,
+    }),
+  );
+}
+
+export async function getScheduleForAssignment(userId: string, assignmentId: string): Promise<ScheduleGoal[]> {
+  return recalculateScheduleForAssignment(userId, assignmentId);
 }

@@ -7,9 +7,13 @@ import type {
   AssignmentDetailDTO,
   AssignmentStateDTO,
   BookmarkUnitRequest,
+  ClarificationTurn,
   CompleteUnitResponse,
   PatchUnitStateRequest,
+  RevisionIssueActionStatus,
   RevisionIssue,
+  RevisionPassResult,
+  ThesisSuggestion,
   UserUnitStateDTO,
 } from '@nephix/contracts';
 
@@ -22,6 +26,10 @@ function countWords(text: string): number {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function issueActionKey(issue: { passId?: string; code: string; sectionTitle?: string }): string {
+  return `${issue.passId ?? 'unknown'}::${issue.code}::${issue.sectionTitle ?? ''}`;
 }
 
 type AssignmentWorkspaceClientProps = {
@@ -40,6 +48,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [completingUnitId, setCompletingUnitId] = useState<string | null>(null);
   const [finishingAssignment, setFinishingAssignment] = useState(false);
+  const [gateWarningsByUnitId, setGateWarningsByUnitId] = useState<Record<string, string[]>>({});
   const bookmarkJumpedRef = useRef<string | null>(null);
 
   const apiFetch = useCallback(
@@ -77,6 +86,15 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
 
     setAssignment(assignmentBody.assignment);
     setAssignmentState(stateBody.state);
+    setGateWarningsByUnitId(() => {
+      const next: Record<string, string[]> = {};
+      for (const unitState of stateBody.state.unitStates) {
+        next[unitState.unitId] = Array.isArray(unitState.readinessWarnings)
+          ? unitState.readinessWarnings
+          : [];
+      }
+      return next;
+    });
   }, [apiFetch, assignmentId]);
 
   const refreshCurrentAssignment = useCallback(async () => {
@@ -187,7 +205,12 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
       }
 
       const body = (await response.json()) as { result: CompleteUnitResponse };
-      setError(null);
+      const warnings = Array.isArray(body.result.warnings) ? body.result.warnings : [];
+      setGateWarningsByUnitId((prev) => ({
+        ...prev,
+        [unitId]: warnings,
+      }));
+      setError(body.result.gateStatus === 'warn' ? 'Completed with readiness warnings.' : null);
       await refreshCurrentAssignment();
 
       if (!body.result.nextUnitId) {
@@ -233,14 +256,84 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     });
   }
 
-  async function runRevisionChecks(): Promise<RevisionIssue[]> {
+  async function runRevisionChecks(): Promise<{ passes: RevisionPassResult[]; issues: RevisionIssue[] }> {
     const response = await apiFetch(`/api/assignments/${assignmentId}/revision-checks`);
     if (!response.ok) {
-      return [];
+      return { passes: [], issues: [] };
     }
 
-    const body = (await response.json()) as { issues: RevisionIssue[] };
-    return body.issues;
+    const body = (await response.json()) as { passes?: RevisionPassResult[]; issues?: RevisionIssue[] };
+    return {
+      passes: Array.isArray(body.passes) ? body.passes : [],
+      issues: Array.isArray(body.issues) ? body.issues : [],
+    };
+  }
+
+  async function requestClarificationChat(unitId: string, message: string): Promise<ClarificationTurn> {
+    const response = await apiFetch(`/api/units/${unitId}/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? 'Failed to send clarification request.');
+    }
+    const body = (await response.json()) as { turn: ClarificationTurn };
+    return body.turn;
+  }
+
+  async function requestThesisSuggestions(
+    unitId: string,
+    regenerate: boolean,
+  ): Promise<ThesisSuggestion[]> {
+    const response = await apiFetch(`/api/units/${unitId}/thesis-suggestions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ regenerate }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? 'Failed to generate thesis suggestions.');
+    }
+    const body = (await response.json()) as { suggestions: ThesisSuggestion[] };
+    return Array.isArray(body.suggestions) ? body.suggestions : [];
+  }
+
+  async function requestOutlineGenerate(
+    unitId: string,
+  ): Promise<Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>> {
+    const response = await apiFetch(`/api/units/${unitId}/outline-generate`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? 'Failed to generate outline.');
+    }
+    const body = (await response.json()) as {
+      sections: Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>;
+    };
+    return Array.isArray(body.sections) ? body.sections : [];
+  }
+
+  async function requestWritingHint(unitId: string, currentSectionText: string): Promise<string> {
+    const response = await apiFetch(`/api/units/${unitId}/writing-hint`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ currentSectionText }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? 'Failed to generate writing hint.');
+    }
+    const body = (await response.json()) as { hint?: { text?: string } };
+    return typeof body.hint?.text === 'string' ? body.hint.text : '';
   }
 
   async function logout(event: FormEvent) {
@@ -435,9 +528,14 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                       isCompleted={isCompleted}
                       completingUnitId={completingUnitId}
                       isEditable={isEditable}
+                      gateWarnings={gateWarningsByUnitId[unit.id] ?? []}
                       onPatch={patchUnitState}
                       onCompleteUnit={completeUnit}
                       onRevisionCheck={runRevisionChecks}
+                      onUnitChat={requestClarificationChat}
+                      onGenerateThesisSuggestions={requestThesisSuggestions}
+                      onGenerateOutline={requestOutlineGenerate}
+                      onRequestWritingHint={requestWritingHint}
                     />
                   </div>
 
@@ -495,9 +593,16 @@ type UnitWorkspaceProps = {
   isCompleted: boolean;
   completingUnitId: string | null;
   isEditable: boolean;
+  gateWarnings: string[];
   onPatch: (unitId: string, payload: PatchUnitStateRequest) => Promise<void>;
   onCompleteUnit: (unitId: string) => Promise<void>;
-  onRevisionCheck: () => Promise<RevisionIssue[]>;
+  onRevisionCheck: () => Promise<{ passes: RevisionPassResult[]; issues: RevisionIssue[] }>;
+  onUnitChat: (unitId: string, message: string) => Promise<ClarificationTurn>;
+  onGenerateThesisSuggestions: (unitId: string, regenerate: boolean) => Promise<ThesisSuggestion[]>;
+  onGenerateOutline: (
+    unitId: string,
+  ) => Promise<Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>>;
+  onRequestWritingHint: (unitId: string, currentSectionText: string) => Promise<string>;
 };
 
 function UnitWorkspace({
@@ -509,15 +614,28 @@ function UnitWorkspace({
   isCompleted,
   completingUnitId,
   isEditable,
+  gateWarnings,
   onPatch,
   onCompleteUnit,
   onRevisionCheck,
+  onUnitChat,
+  onGenerateThesisSuggestions,
+  onGenerateOutline,
+  onRequestWritingHint,
 }: UnitWorkspaceProps) {
   const [content, setContent] = useState<Record<string, unknown>>({});
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   const contentRef = useRef<Record<string, unknown>>({});
   const readingContainerRef = useRef<HTMLDivElement | null>(null);
   const initializedUnitRef = useRef<string | null>(null);
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatTurns, setChatTurns] = useState<ClarificationTurn[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [thesisSuggestions, setThesisSuggestions] = useState<ThesisSuggestion[]>([]);
+  const [thesisSuggestionsBusy, setThesisSuggestionsBusy] = useState(false);
+  const [outlineBusy, setOutlineBusy] = useState(false);
+  const [writingHintBusy, setWritingHintBusy] = useState(false);
+  const [revisionPasses, setRevisionPasses] = useState<RevisionPassResult[]>([]);
 
   useEffect(() => {
     if (initializedUnitRef.current === unit.id) {
@@ -531,15 +649,15 @@ function UnitWorkspace({
     } else {
       if (unit.unitType === 'outline') {
         const sections = Array.isArray(unit.payload.sections) ? unit.payload.sections : [];
-        const nextContent = { sections };
+        const nextContent = { sections, confirmed: false };
         contentRef.current = nextContent;
         setContent(nextContent);
       } else if (unit.unitType === 'thesis') {
-        const nextContent = { thesis: '' };
+        const nextContent = { thesis: '', confirmed: false };
         contentRef.current = nextContent;
         setContent(nextContent);
       } else if (unit.unitType === 'writing') {
-        const nextContent = { text: '' };
+        const nextContent = { text: '', confirmed: false };
         contentRef.current = nextContent;
         setContent(nextContent);
       } else if (unit.unitType === 'revise') {
@@ -554,6 +672,14 @@ function UnitWorkspace({
 
     initializedUnitRef.current = unit.id;
     setSaveState('idle');
+    setChatMessage('');
+    setChatTurns([]);
+    setThesisSuggestions(
+      Array.isArray(contentRef.current.thesisSuggestions)
+        ? (contentRef.current.thesisSuggestions as ThesisSuggestion[])
+        : [],
+    );
+    setRevisionPasses([]);
   }, [unit.id, unit.unitType, unit.payload, unitState?.content]);
 
   useEffect(() => {
@@ -634,6 +760,29 @@ function UnitWorkspace({
             ? 'Save failed'
             : '';
 
+  const gateWarningsBlock =
+    gateWarnings.length > 0 ? (
+      <div
+        style={{
+          border: '1px solid #f59e0b',
+          borderRadius: 10,
+          background: '#fffbeb',
+          padding: 10,
+          display: 'grid',
+          gap: 6,
+        }}
+      >
+        <strong style={{ fontSize: 12, textTransform: 'uppercase', color: '#92400e' }}>
+          Soft gate warnings
+        </strong>
+        {gateWarnings.map((warning) => (
+          <p key={warning} style={{ margin: 0, color: '#78350f' }}>
+            {warning}
+          </p>
+        ))}
+      </div>
+    ) : null;
+
   const writingGuideMap = useMemo(() => {
     const outlineUnit = units.find((entry) => entry.unitType === 'outline');
     if (!outlineUnit) {
@@ -674,6 +823,7 @@ function UnitWorkspace({
 
     return (
       <div style={{ display: 'grid', gap: 10 }}>
+        {gateWarningsBlock}
         <div
           ref={readingContainerRef}
           onScroll={onReadingScroll}
@@ -688,6 +838,63 @@ function UnitWorkspace({
           }}
         >
           {text}
+        </div>
+        <div
+          style={{
+            border: '1px solid #dbe3ec',
+            borderRadius: 12,
+            padding: 10,
+            display: 'grid',
+            gap: 8,
+            background: '#f8fafc',
+          }}
+        >
+          <p className="muted" style={{ margin: 0 }}>
+            Clarification chat (unit-scoped)
+          </p>
+          <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflow: 'auto' }}>
+            {chatTurns.length === 0 ? (
+              <p className="muted" style={{ margin: 0 }}>
+                Ask a short question about this fragment.
+              </p>
+            ) : (
+              chatTurns.map((turn) => (
+                <div key={turn.id} style={{ display: 'grid', gap: 4 }}>
+                  <p style={{ margin: 0, fontWeight: 600 }}>You: {turn.userMessage}</p>
+                  <p style={{ margin: 0 }}>AI: {turn.assistantMessage}</p>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="row mobile-stack">
+            <input
+              value={chatMessage}
+              onChange={(event) => setChatMessage(event.target.value)}
+              placeholder="Ask for clarification on this text..."
+              disabled={chatBusy}
+            />
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={chatBusy || chatMessage.trim().length === 0}
+              onClick={async () => {
+                const message = chatMessage.trim();
+                if (!message) {
+                  return;
+                }
+                setChatBusy(true);
+                try {
+                  const turn = await onUnitChat(unit.id, message);
+                  setChatTurns((prev) => [...prev, turn]);
+                  setChatMessage('');
+                } finally {
+                  setChatBusy(false);
+                }
+              }}
+            >
+              {chatBusy ? 'Sending...' : 'Ask'}
+            </button>
+          </div>
         </div>
         <button
           type="button"
@@ -707,9 +914,11 @@ function UnitWorkspace({
 
   if (unit.unitType === 'thesis') {
     const thesis = typeof content.thesis === 'string' ? content.thesis : '';
+    const confirmed = Boolean(content.confirmed);
 
     return (
       <div style={{ display: 'grid', gap: 10 }}>
+        {gateWarningsBlock}
         <label className="field">
           <span>Thesis statement</span>
           <textarea
@@ -719,8 +928,81 @@ function UnitWorkspace({
             disabled={!isEditable}
           />
         </label>
+        <div className="row mobile-stack">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={thesisSuggestionsBusy}
+            onClick={async () => {
+              setThesisSuggestionsBusy(true);
+              try {
+                const suggestions = await onGenerateThesisSuggestions(unit.id, false);
+                setThesisSuggestions(suggestions);
+                updateContent({ thesisSuggestions: suggestions });
+              } finally {
+                setThesisSuggestionsBusy(false);
+              }
+            }}
+          >
+            {thesisSuggestionsBusy ? 'Generating...' : 'Generate thesis ideas'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={thesisSuggestionsBusy}
+            onClick={async () => {
+              setThesisSuggestionsBusy(true);
+              try {
+                const suggestions = await onGenerateThesisSuggestions(unit.id, true);
+                setThesisSuggestions(suggestions);
+                updateContent({ thesisSuggestions: suggestions });
+              } finally {
+                setThesisSuggestionsBusy(false);
+              }
+            }}
+          >
+            Regenerate
+          </button>
+        </div>
+        {thesisSuggestions.length > 0 ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {thesisSuggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                className="btn btn-soft"
+                style={{
+                  textAlign: 'left',
+                  borderColor: suggestion.text === thesis ? '#0d9488' : undefined,
+                }}
+                onClick={() => {
+                  updateContent({
+                    thesis: suggestion.text,
+                    confirmed: true,
+                  });
+                }}
+              >
+                {suggestion.text}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <label className="row" style={{ alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+            disabled={!isEditable}
+          />
+          <span>I confirm this thesis as final.</span>
+        </label>
         <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void saveAndMaybeComplete()}
+            disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+          >
             {saveState === 'saving' ? 'Saving...' : 'Save'}
           </button>
           <p className="muted" style={{ margin: 0 }}>
@@ -734,9 +1016,29 @@ function UnitWorkspace({
   if (unit.unitType === 'outline') {
     const fallbackSections = Array.isArray(unit.payload.sections) ? unit.payload.sections : [];
     const sections = Array.isArray(content.sections) ? content.sections : fallbackSections;
+    const confirmed = Boolean(content.confirmed);
 
     return (
       <div style={{ display: 'grid', gap: 10 }}>
+        {gateWarningsBlock}
+        <div className="row mobile-stack">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={outlineBusy}
+            onClick={async () => {
+              setOutlineBusy(true);
+              try {
+                const generated = await onGenerateOutline(unit.id);
+                updateContent({ sections: generated });
+              } finally {
+                setOutlineBusy(false);
+              }
+            }}
+          >
+            {outlineBusy ? 'Generating...' : 'Generate outline'}
+          </button>
+        </div>
         <div className="outline-table-wrap">
           <table className="outline-table">
             <thead>
@@ -819,8 +1121,22 @@ function UnitWorkspace({
           </table>
         </div>
 
+        <label className="row" style={{ alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+            disabled={!isEditable}
+          />
+          <span>I confirm this outline.</span>
+        </label>
         <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void saveAndMaybeComplete()}
+            disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+          >
             {saveState === 'saving' ? 'Saving...' : 'Save'}
           </button>
           {saveLabel ? (
@@ -836,6 +1152,8 @@ function UnitWorkspace({
   if (unit.unitType === 'writing') {
     const text = typeof content.text === 'string' ? content.text : '';
     const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
+    const confirmed = Boolean(content.confirmed);
+    const hint = typeof content.writingHint === 'string' ? content.writingHint : '';
     const sectionId = typeof unit.payload.sectionId === 'string' ? unit.payload.sectionId : '';
     const outlineGuide = sectionId ? writingGuideMap.get(sectionId) : undefined;
     const guidingQuestion =
@@ -844,10 +1162,46 @@ function UnitWorkspace({
 
     return (
       <div style={{ display: 'grid', gap: 10 }}>
+        {gateWarningsBlock}
         {guidingQuestion ? (
           <p className="muted" style={{ marginTop: 0 }}>
             {guidingQuestion}
           </p>
+        ) : null}
+        <div className="row mobile-stack">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={writingHintBusy}
+            onClick={async () => {
+              setWritingHintBusy(true);
+              try {
+                const nextHint = await onRequestWritingHint(unit.id, text);
+                if (nextHint) {
+                  updateContent({ writingHint: nextHint });
+                }
+              } finally {
+                setWritingHintBusy(false);
+              }
+            }}
+          >
+            {writingHintBusy ? 'Generating...' : 'Suggest a hint'}
+          </button>
+        </div>
+        {hint ? (
+          <div
+            style={{
+              border: '1px solid #dbe3ec',
+              borderRadius: 12,
+              padding: 10,
+              background: '#f8fafc',
+            }}
+          >
+            <p className="muted" style={{ margin: 0 }}>
+              Hint
+            </p>
+            <p style={{ margin: '4px 0 0' }}>{hint}</p>
+          </div>
         ) : null}
         <label className="field">
           <span>Draft text</span>
@@ -858,8 +1212,22 @@ function UnitWorkspace({
             style={{ minHeight: 240 }}
           />
         </label>
+        <label className="row" style={{ alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+            disabled={!isEditable}
+          />
+          <span>I confirm this section draft is ready.</span>
+        </label>
         <div className="row" style={{ alignItems: 'center' }}>
-          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void saveAndMaybeComplete()}
+            disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+          >
             {saveState === 'saving' ? 'Saving...' : 'Save'}
           </button>
           <p className="muted" style={{ margin: 0 }}>
@@ -875,14 +1243,29 @@ function UnitWorkspace({
   const issues = Array.isArray(content.issues)
     ? content.issues.filter((issue) => isObjectRecord(issue))
     : [];
+  const issueActions =
+    content.issueActions && isObjectRecord(content.issueActions)
+      ? (content.issueActions as Record<string, RevisionIssueActionStatus>)
+      : {};
   const confirmed = Boolean(content.confirmed);
   const fullDraft = writingSections
     .map((section) => `${section.title.replace(/^Write:\s*/i, '')}\n${section.text}`)
     .join('\n\n');
   const revisionText = typeof content.revisionText === 'string' ? content.revisionText : fullDraft;
+  const passesToRender =
+    revisionPasses.length > 0
+      ? revisionPasses
+      : [
+          {
+            passId: 'legacy',
+            passTitle: 'Revision Issues',
+            issues: issues as unknown as RevisionIssue[],
+          },
+        ];
 
   return (
     <div style={{ display: 'grid', gap: 10 }}>
+      {gateWarningsBlock}
       <label className="field">
         <span>Revision draft</span>
         <textarea
@@ -897,8 +1280,9 @@ function UnitWorkspace({
           type="button"
           className="btn"
           onClick={async () => {
-            const nextIssues = await onRevisionCheck();
-            updateContent({ issues: nextIssues });
+            const next = await onRevisionCheck();
+            setRevisionPasses(next.passes);
+            updateContent({ issues: next.issues });
           }}
           disabled={!isEditable}
         >
@@ -906,42 +1290,80 @@ function UnitWorkspace({
         </button>
       </div>
 
-      <div style={{ display: 'grid', gap: 8 }}>
-        {issues.length === 0 ? (
+      <div style={{ display: 'grid', gap: 10 }}>
+        {passesToRender.every((pass) => pass.issues.length === 0) ? (
           <p className="muted" style={{ margin: 0 }}>
             No issues yet. Run checks to analyze structure and word balance.
           </p>
         ) : (
-          issues.map((rawIssue, index) => {
-            const severity =
-              rawIssue.severity === 'high' || rawIssue.severity === 'medium' || rawIssue.severity === 'low'
-                ? rawIssue.severity
-                : 'low';
-            const message = typeof rawIssue.message === 'string' ? rawIssue.message : 'Issue';
-            const sectionTitle =
-              typeof rawIssue.sectionTitle === 'string' ? rawIssue.sectionTitle : undefined;
+          passesToRender.map((pass) => (
+            <div key={pass.passId} style={{ display: 'grid', gap: 8 }}>
+              <strong style={{ fontSize: 13 }}>{pass.passTitle}</strong>
+              {pass.issues.map((rawIssue, index) => {
+                const severity =
+                  rawIssue.severity === 'high' ||
+                  rawIssue.severity === 'medium' ||
+                  rawIssue.severity === 'low'
+                    ? rawIssue.severity
+                    : 'low';
+                const message = typeof rawIssue.message === 'string' ? rawIssue.message : 'Issue';
+                const sectionTitle =
+                  typeof rawIssue.sectionTitle === 'string' ? rawIssue.sectionTitle : undefined;
+                const issueKey = issueActionKey(rawIssue);
+                const actionStatus = issueActions[issueKey] ?? rawIssue.actionStatus ?? 'open';
 
-            return (
-              <div
-                key={`${message}-${index}`}
-                style={{
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 12,
-                  padding: 10,
-                  background:
-                    severity === 'high' ? '#fee2e2' : severity === 'medium' ? '#fef3c7' : '#eff6ff',
-                }}
-              >
-                <strong style={{ textTransform: 'uppercase', fontSize: 12 }}>{severity}</strong>
-                <p style={{ margin: '6px 0 0' }}>{message}</p>
-                {sectionTitle ? (
-                  <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-                    Section: {sectionTitle}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })
+                return (
+                  <div
+                    key={`${pass.passId}-${message}-${index}`}
+                    style={{
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 12,
+                      padding: 10,
+                      background:
+                        severity === 'high' ? '#fee2e2' : severity === 'medium' ? '#fef3c7' : '#eff6ff',
+                      display: 'grid',
+                      gap: 6,
+                    }}
+                  >
+                    <strong style={{ textTransform: 'uppercase', fontSize: 12 }}>{severity}</strong>
+                    <p style={{ margin: 0 }}>{message}</p>
+                    {sectionTitle ? (
+                      <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                        Section: {sectionTitle}
+                      </p>
+                    ) : null}
+                    <div className="row mobile-stack">
+                      {(['open', 'postponed', 'ignored', 'resolved'] as const).map((status) => (
+                        <button
+                          key={status}
+                          type="button"
+                          className="btn btn-sm"
+                          style={{
+                            borderColor: actionStatus === status ? '#0d9488' : undefined,
+                          }}
+                          onClick={() => {
+                            const nextActions = {
+                              ...issueActions,
+                              [issueKey]: status,
+                            };
+                            updateContent({
+                              issueActions: nextActions,
+                              lastIssueAction: {
+                                issueKey,
+                                status,
+                              },
+                            });
+                          }}
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))
         )}
       </div>
 
