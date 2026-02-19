@@ -10,20 +10,20 @@ import { unitChatRequestSchema } from '@nephix/contracts';
 import { requireAuthenticatedUser } from '@/lib/auth/require-user';
 import { parseJsonBody } from '@/lib/http';
 import { tryCompleteWithXai } from '@/lib/ai/client';
-import { sanitizeClarificationResponse } from '@/lib/ai/validators';
 import { getXaiModelChat } from '@/lib/env';
 
-function shouldRejectScope(message: string): boolean {
-  const lower = message.toLowerCase();
-  const blocked = [
-    'rewrite',
-    'summarize everything',
-    'write me an essay',
-    'replace the text',
-    'new version',
-    'unrelated',
-  ];
-  return blocked.some((entry) => lower.includes(entry));
+function capWords(text: string, maxWords: number): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (!cleaned) {
+    return '';
+  }
+
+  const words = cleaned.split(' ').filter(Boolean);
+  if (words.length <= maxWords) {
+    return cleaned;
+  }
+
+  return words.slice(0, maxWords).join(' ');
 }
 
 export async function GET(request: Request, context: { params: Promise<{ unitId: string }> }) {
@@ -53,37 +53,19 @@ export async function POST(request: Request, context: { params: Promise<{ unitId
   try {
     const params = await context.params;
     const payload = await parseJsonBody(request, unitChatRequestSchema);
-    if (shouldRejectScope(payload.message)) {
-      return NextResponse.json(
-        { error: 'Clarification chat only supports local explanations of this unit text.' },
-        { status: 400 },
-      );
-    }
 
     const unit = await getAssignmentUnitById(params.unitId);
     if (unit.unitType !== 'reading') {
       throw new ValidationError('Clarification chat is available only for reading units.');
     }
 
-    const sourceText = typeof unit.payload.text === 'string' ? unit.payload.text : '';
-    const previousTurns = await listClarificationTurnsForUnit(user.id, params.unitId, 6);
-    const conversation = previousTurns.flatMap((turn) => [
-      { role: 'user' as const, content: turn.userMessage },
-      { role: 'assistant' as const, content: turn.assistantMessage },
-    ]);
-
     const aiRaw = await tryCompleteWithXai(
       [
         {
           role: 'system',
           content:
-            'You are a reading vocabulary tutor. Primary task: define the exact word or short phrase the user asks about. Keep the answer to at most 2 short sentences. Sentence 1 must define the word plainly. Sentence 2 must tie that meaning to the provided unit text. Use only the provided unit text. If the user asks a broad question, ask them to provide one specific word or phrase. Do not rewrite or summarize the full unit.',
+            'Answer the user question directly. Maximum 10 words. No preface.',
         },
-        {
-          role: 'system',
-          content: `UNIT TEXT:\n${sourceText}`,
-        },
-        ...conversation,
         {
           role: 'user',
           content: payload.message,
@@ -91,16 +73,22 @@ export async function POST(request: Request, context: { params: Promise<{ unitId
       ],
       {
         model: getXaiModelChat(),
-        temperature: 0.1,
-        maxTokens: 220,
+        temperature: 0,
+        maxTokens: 60,
       },
     );
 
-    const assistantMessage = sanitizeClarificationResponse(
-      aiRaw ?? '',
-      sourceText,
-      payload.message,
-    );
+    if (!aiRaw) {
+      return NextResponse.json(
+        { error: 'AI response unavailable. Check XAI_API_KEY and model configuration.' },
+        { status: 502 },
+      );
+    }
+
+    const assistantMessage = capWords(aiRaw, 10);
+    if (!assistantMessage) {
+      return NextResponse.json({ error: 'AI returned an empty response.' }, { status: 502 });
+    }
 
     const turn = await createClarificationTurnForUnit(
       user.id,

@@ -73,6 +73,10 @@ function normalizeToken(token: string): string {
   return normalized;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function tokenizeMeaningful(text: string): string[] {
   return text
     .split(/\s+/)
@@ -123,79 +127,193 @@ function splitSentences(text: string): string[] {
     .filter(Boolean);
 }
 
-function truncateText(text: string, maxLength: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLength - 3).trim()}...`;
+const BROAD_SCOPE_PATTERNS: RegExp[] = [
+  /\bsummar(?:y|ize|ise|ized|ised)\b/i,
+  /\bmain idea\b/i,
+  /\boverview\b/i,
+  /\bexplain\b.*\b(fragment|text|passage|paragraph|section|chapter|whole|entire)\b/i,
+  /\bwhat is (this|it) about\b/i,
+  /\brewrite\b/i,
+  /\bwrite me\b/i,
+  /\bessay\b/i,
+];
+
+function cleanInputText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
-function selectRelevantSentence(sourceText: string, question: string): string | null {
-  const questionTokens = tokenizeMeaningful(question);
-  const sentences = splitSentences(sourceText);
-  if (sentences.length === 0) {
+function extractQuotedTerm(message: string): string | null {
+  const match = message.match(/["'`]([^"'`]{1,64})["'`]/);
+  if (!match?.[1]) {
+    return null;
+  }
+  return cleanInputText(match[1]);
+}
+
+function parseCandidateTerm(rawMessage: string): string | null {
+  const message = cleanInputText(rawMessage);
+  if (!message) {
+    return null;
+  }
+  if (BROAD_SCOPE_PATTERNS.some((pattern) => pattern.test(message))) {
     return null;
   }
 
-  let bestSentence = sentences[0];
-  let bestScore = -1;
-  for (const sentence of sentences) {
-    const sentenceTokens = new Set(tokenizeMeaningful(sentence));
-    const overlap = questionTokens.filter((token) => sentenceTokens.has(token)).length;
-    if (overlap > bestScore) {
-      bestScore = overlap;
-      bestSentence = sentence;
+  const quoted = extractQuotedTerm(message);
+  if (quoted) {
+    return quoted;
+  }
+
+  const patterns = [
+    /^what does\s+(.+?)\s+mean\??$/i,
+    /^what is the meaning of\s+(.+?)\??$/i,
+    /^meaning of\s+(.+?)\??$/i,
+    /^define\s+(.+?)\??$/i,
+    /^definition of\s+(.+?)\??$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (match?.[1]) {
+      return cleanInputText(match[1]);
     }
   }
 
-  return truncateText(bestSentence, 180);
+  return message;
 }
 
-function extractFocusTerm(question: string): string | null {
-  const quoted = question.match(/["“”'‘’]([^"“”'‘’]{2,64})["“”'‘’]/);
-  if (quoted?.[1]) {
-    const cleanedQuoted = quoted[1].trim().replace(/\s+/g, ' ');
-    return cleanedQuoted.length > 1 ? cleanedQuoted : null;
+function normalizeCandidateTerm(rawCandidate: string): string | null {
+  const candidate = cleanInputText(rawCandidate)
+    .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '')
+    .replace(/[?!.,]+$/g, '')
+    .trim();
+
+  if (!candidate) {
+    return null;
+  }
+  if (/[\n\r]/.test(candidate)) {
+    return null;
+  }
+  if (/[;:()[\]{}]/.test(candidate)) {
+    return null;
   }
 
-  const parts = question.split(/\s+/);
-  for (const part of parts) {
-    const cleaned = part.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
-    if (cleaned.length < 3) {
-      continue;
+  const words = candidate.split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 4) {
+    return null;
+  }
+  if (candidate.length > 64) {
+    return null;
+  }
+
+  const meaningfulWordCount = words
+    .map((word) => normalizeToken(word))
+    .filter((word) => word.length > 2 && !MEANINGFUL_TOKEN_STOPWORDS.has(word)).length;
+  if (meaningfulWordCount === 0) {
+    return null;
+  }
+
+  return candidate;
+}
+
+export function extractDefinitionTarget(message: string): string | null {
+  const candidate = parseCandidateTerm(message);
+  if (!candidate) {
+    return null;
+  }
+  return normalizeCandidateTerm(candidate);
+}
+
+export function isDefinitionTargetInSource(sourceText: string, target: string): boolean {
+  const escapedTarget = escapeRegExp(target).replace(/\s+/g, '\\s+');
+  const direct = new RegExp(`\\b${escapedTarget}\\b`, 'i');
+  if (direct.test(sourceText)) {
+    return true;
+  }
+
+  const normalizedTargetWords = target
+    .split(/\s+/)
+    .map(normalizeToken)
+    .filter(Boolean);
+  const normalizedSourceWords = sourceText
+    .split(/\s+/)
+    .map(normalizeToken)
+    .filter(Boolean);
+
+  if (normalizedTargetWords.length === 0 || normalizedSourceWords.length === 0) {
+    return false;
+  }
+
+  if (normalizedTargetWords.length === 1) {
+    return normalizedSourceWords.includes(normalizedTargetWords[0]);
+  }
+
+  for (let index = 0; index <= normalizedSourceWords.length - normalizedTargetWords.length; index += 1) {
+    let allMatch = true;
+    for (let offset = 0; offset < normalizedTargetWords.length; offset += 1) {
+      if (normalizedSourceWords[index + offset] !== normalizedTargetWords[offset]) {
+        allMatch = false;
+        break;
+      }
     }
-    if (MEANINGFUL_TOKEN_STOPWORDS.has(cleaned.toLowerCase())) {
-      continue;
+    if (allMatch) {
+      return true;
     }
-    return cleaned;
   }
-
-  return null;
+  return false;
 }
 
-function buildClarificationFallback(sourceText: string, question: string): string {
-  const relevantSentence = selectRelevantSentence(sourceText, question);
-  const focus = extractFocusTerm(question);
-
-  if (relevantSentence && focus) {
-    return `"${focus}" in this unit means the idea shown in: "${relevantSentence}".`;
-  }
-  if (relevantSentence) {
-    return `Key context line: "${relevantSentence}". Ask about one word and I will define it.`;
+function parseJsonDefinition(raw: string): string | null {
+  const text = raw.trim();
+  if (!text.startsWith('{') || !text.endsWith('}')) {
+    return null;
   }
 
-  return 'Ask about one specific word, and I will define it in this unit context.';
+  try {
+    const parsed = JSON.parse(text) as { definition?: unknown };
+    return typeof parsed.definition === 'string' ? cleanInputText(parsed.definition) : null;
+  } catch {
+    return null;
+  }
 }
 
-function looksLikeGenericRefusal(answer: string): boolean {
-  const lower = answer.toLowerCase();
-  return (
-    lower.includes('point to the exact part') ||
-    lower.includes('point to the exact phrase') ||
-    lower.includes('i can clarify a specific phrase') ||
-    lower.includes('i can only clarify')
-  );
+function ensureTrailingPeriod(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+function looksLikeSummaryResponse(text: string, sourceText: string): boolean {
+  const lower = text.toLowerCase();
+  const bannedPhrases = [
+    'in this unit',
+    'in this fragment',
+    'key context line',
+    'idea shown in',
+    'the text says',
+    'this sentence',
+    'this line',
+  ];
+  if (bannedPhrases.some((phrase) => lower.includes(phrase))) {
+    return true;
+  }
+
+  const compact = cleanInputText(text);
+  if (compact.split(/\s+/).length > 24) {
+    return true;
+  }
+
+  const sourceSentences = splitSentences(sourceText);
+  for (const sentence of sourceSentences) {
+    const probe = sentence.toLowerCase().slice(0, 48);
+    if (probe.length >= 24 && lower.includes(probe)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildDefinitionFallback(target: string): string {
+  return `${target}: definition unavailable. Ask with one word from this reading text.`;
 }
 
 export function sanitizeClarificationResponse(
@@ -203,14 +321,41 @@ export function sanitizeClarificationResponse(
   sourceText: string,
   question: string,
 ): string {
-  const short = clampToMaxSentences(answer, 3).replace(/\s+/g, ' ').trim();
-  if (short.length === 0 || looksLikeGenericRefusal(short)) {
-    return buildClarificationFallback(sourceText, question);
+  const target = extractDefinitionTarget(question);
+  if (!target) {
+    return 'Ask for one word or a short phrase from the reading text.';
   }
-  if (!isClarificationAnchored(short, sourceText)) {
-    return buildClarificationFallback(sourceText, question);
+
+  const parsedJson = parseJsonDefinition(answer ?? '');
+  const raw = cleanInputText(parsedJson ?? answer ?? '');
+  if (!raw || /term_not_found/i.test(raw)) {
+    return buildDefinitionFallback(target);
   }
-  return short;
+
+  let single = clampToMaxSentences(raw, 1).replace(/\s+/g, ' ').trim();
+  single = single.replace(/^[`"' ]+|[`"' ]+$/g, '').trim();
+  single = single.replace(/["'`]([^"'`]{30,})["'`]/g, '').trim();
+  if (!single) {
+    return buildDefinitionFallback(target);
+  }
+
+  const escapedTarget = escapeRegExp(target);
+  const definition = single
+    .replace(new RegExp(`^${escapedTarget}\\s*[:\\-–]\\s*`, 'i'), '')
+    .replace(new RegExp(`^${escapedTarget}\\s+(means|is|refers to)\\s+`, 'i'), '')
+    .replace(/^(it|this|that)\s+(means|is|refers to)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!definition) {
+    return buildDefinitionFallback(target);
+  }
+
+  if (looksLikeSummaryResponse(definition, sourceText)) {
+    return buildDefinitionFallback(target);
+  }
+
+  return `${target}: ${ensureTrailingPeriod(definition)}`;
 }
 
 export function enforceSingleSentenceHint(hint: string): string {

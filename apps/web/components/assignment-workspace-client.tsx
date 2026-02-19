@@ -615,8 +615,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                   </button>
                 </div>
                 <p className="muted" style={{ margin: 0 }}>
-                  Ask about one word or short phrase from the current reading unit. The chat explains meaning in
-                  context.
+                  Ask any question. Chat answers are capped at 10 words.
                 </p>
 
                 <div
@@ -643,7 +642,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                   ) : null}
                   {!readingChatLoading && readingChatTurns.length === 0 ? (
                     <p className="muted" style={{ margin: 0 }}>
-                      Ask about one word, for example: What does &quot;alienation&quot; mean here?
+                      Example input: What is the main idea here?
                     </p>
                   ) : (
                     readingChatTurns.map((turn) => (
@@ -691,7 +690,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                   <input
                     value={readingChatMessage}
                     onChange={(event) => setReadingChatMessage(event.target.value)}
-                    placeholder="Write your question..."
+                    placeholder="Type your question..."
                     disabled={readingChatBusy || readingChatLoading}
                     autoFocus
                     style={{ flex: 1 }}
