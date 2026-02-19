@@ -79,6 +79,10 @@ function buildPreviewFromText(text: string): string {
   return words.length > 3 ? `${preview}...` : preview;
 }
 
+function isMissingTableError(error: unknown): boolean {
+  return isRecord(error) && typeof error.code === 'string' && error.code === 'P2021';
+}
+
 function mapAuthUser(user: { id: string; email: string; createdAt: Date }): AuthUserDTO {
   return {
     id: user.id,
@@ -258,15 +262,22 @@ async function createInteractionEvent(
     meta?: Record<string, unknown>;
   },
 ) {
-  await db.userInteractionEvent.create({
-    data: {
-      userId: payload.userId,
-      assignmentId: payload.assignmentId,
-      unitId: payload.unitId ?? undefined,
-      eventType: toInteractionEventType(payload.eventType),
-      meta: payload.meta as Prisma.InputJsonValue | undefined,
-    },
-  });
+  try {
+    await db.userInteractionEvent.create({
+      data: {
+        userId: payload.userId,
+        assignmentId: payload.assignmentId,
+        unitId: payload.unitId ?? undefined,
+        eventType: toInteractionEventType(payload.eventType),
+        meta: payload.meta as Prisma.InputJsonValue | undefined,
+      },
+    });
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function getUserByEmail(email: string) {
@@ -488,21 +499,28 @@ export async function listFeedForUser(userId: string): Promise<AssignmentSummary
   }
 
   const lookbackDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const events = await prisma.userInteractionEvent.findMany({
-    where: {
-      userId,
-      assignmentId: {
-        in: assignmentIds,
+  let events: Array<{ assignmentId: string; eventType: PrismaUserInteractionEventType }> = [];
+  try {
+    events = await prisma.userInteractionEvent.findMany({
+      where: {
+        userId,
+        assignmentId: {
+          in: assignmentIds,
+        },
+        createdAt: {
+          gte: lookbackDate,
+        },
       },
-      createdAt: {
-        gte: lookbackDate,
+      select: {
+        assignmentId: true,
+        eventType: true,
       },
-    },
-    select: {
-      assignmentId: true,
-      eventType: true,
-    },
-  });
+    });
+  } catch (error) {
+    if (!isMissingTableError(error)) {
+      throw error;
+    }
+  }
 
   const eventWeights: Record<PrismaUserInteractionEventType, number> = {
     UNIT_OPENED: 1,

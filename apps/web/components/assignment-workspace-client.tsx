@@ -50,6 +50,14 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   const [finishingAssignment, setFinishingAssignment] = useState(false);
   const [gateWarningsByUnitId, setGateWarningsByUnitId] = useState<Record<string, string[]>>({});
   const bookmarkJumpedRef = useRef<string | null>(null);
+  const [isReadingChatOpen, setIsReadingChatOpen] = useState(false);
+  const [readingChatUnitId, setReadingChatUnitId] = useState<string | null>(null);
+  const [readingChatMessage, setReadingChatMessage] = useState('');
+  const [readingChatTurns, setReadingChatTurns] = useState<ClarificationTurn[]>([]);
+  const [readingChatLoading, setReadingChatLoading] = useState(false);
+  const [readingChatBusy, setReadingChatBusy] = useState(false);
+  const [readingChatError, setReadingChatError] = useState<string | null>(null);
+  const readingChatScrollRef = useRef<HTMLDivElement | null>(null);
 
   const apiFetch = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -127,6 +135,10 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   }, [loadInitial]);
 
   const units = assignment?.units ?? [];
+  const readingUnits = useMemo(
+    () => units.filter((unit) => unit.unitType === 'reading'),
+    [units],
+  );
   const bookmarkUnitId = searchParams.get('unitId');
   const stateByUnit = useMemo(() => {
     const entries = assignmentState?.unitStates ?? [];
@@ -139,6 +151,27 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     [assignmentState],
   );
   const allUnitsCompleted = units.length > 0 && completedUnits >= units.length;
+  const selectedReadingUnit =
+    readingUnits.find((unit) => unit.id === readingChatUnitId) ?? readingUnits[0] ?? null;
+
+  useEffect(() => {
+    if (readingUnits.length === 0) {
+      setReadingChatUnitId(null);
+      return;
+    }
+
+    const preferredUnitId =
+      activeUnitId && readingUnits.some((unit) => unit.id === activeUnitId)
+        ? activeUnitId
+        : readingUnits[0]?.id ?? null;
+
+    setReadingChatUnitId((previous) => {
+      if (previous && readingUnits.some((unit) => unit.id === previous)) {
+        return previous;
+      }
+      return preferredUnitId;
+    });
+  }, [activeUnitId, readingUnits]);
 
   useEffect(() => {
     if (!bookmarkUnitId || !assignment) {
@@ -285,6 +318,16 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     return body.turn;
   }
 
+  async function requestClarificationHistory(unitId: string): Promise<ClarificationTurn[]> {
+    const response = await apiFetch(`/api/units/${unitId}/chat`);
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? 'Failed to load chat history.');
+    }
+    const body = (await response.json()) as { turns?: ClarificationTurn[] };
+    return Array.isArray(body.turns) ? body.turns : [];
+  }
+
   async function requestThesisSuggestions(
     unitId: string,
     regenerate: boolean,
@@ -334,6 +377,55 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     }
     const body = (await response.json()) as { hint?: { text?: string } };
     return typeof body.hint?.text === 'string' ? body.hint.text : '';
+  }
+
+  useEffect(() => {
+    if (!isReadingChatOpen || !readingChatUnitId) {
+      return;
+    }
+
+    setReadingChatLoading(true);
+    setReadingChatError(null);
+    requestClarificationHistory(readingChatUnitId)
+      .then((turns) => {
+        setReadingChatTurns(turns);
+      })
+      .catch((error: unknown) => {
+        setReadingChatError(error instanceof Error ? error.message : 'Failed to load chat history.');
+      })
+      .finally(() => {
+        setReadingChatLoading(false);
+      });
+  }, [isReadingChatOpen, readingChatUnitId]);
+
+  useEffect(() => {
+    if (!isReadingChatOpen) {
+      return;
+    }
+    const element = readingChatScrollRef.current;
+    if (!element) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+  }, [isReadingChatOpen, readingChatTurns]);
+
+  async function sendReadingClarificationMessage() {
+    const message = readingChatMessage.trim();
+    if (!message || !readingChatUnitId || readingChatBusy || readingChatLoading) {
+      return;
+    }
+
+    setReadingChatBusy(true);
+    setReadingChatError(null);
+    try {
+      const turn = await requestClarificationChat(readingChatUnitId, message);
+      setReadingChatTurns((previous) => [...previous, turn]);
+      setReadingChatMessage('');
+    } catch (error) {
+      setReadingChatError(error instanceof Error ? error.message : 'Failed to send clarification request.');
+    } finally {
+      setReadingChatBusy(false);
+    }
   }
 
   async function logout(event: FormEvent) {
@@ -480,6 +572,171 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
             />
           </div>
 
+          {assignment.taskType === 'reading' && readingUnits.length > 0 ? (
+            <div className="row mobile-stack" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn-soft btn-sm"
+                onClick={() => {
+                  setIsReadingChatOpen(true);
+                  setReadingChatError(null);
+                }}
+              >
+                Open Clarification Chat
+              </button>
+            </div>
+          ) : null}
+
+          {assignment.taskType === 'reading' && isReadingChatOpen && selectedReadingUnit ? (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15, 23, 42, 0.45)',
+                zIndex: 70,
+                display: 'grid',
+                placeItems: 'center',
+                padding: 16,
+              }}
+            >
+              <div
+                className="panel"
+                style={{
+                  width: 'min(760px, 100%)',
+                  maxHeight: '80vh',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: 14,
+                  overflow: 'hidden',
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Clarification chat"
+              >
+                <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong>Clarification Chat</strong>
+                  <button type="button" className="btn btn-sm" onClick={() => setIsReadingChatOpen(false)}>
+                    Close
+                  </button>
+                </div>
+                <p className="muted" style={{ margin: 0 }}>
+                  Ask about this reading assignment.
+                </p>
+                {readingUnits.length > 1 ? (
+                  <label className="field" style={{ marginTop: 10 }}>
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      Fragment
+                    </span>
+                    <select
+                      value={selectedReadingUnit.id}
+                      onChange={(event) => {
+                        setReadingChatUnitId(event.target.value);
+                      }}
+                      disabled={readingChatLoading || readingChatBusy}
+                    >
+                      {readingUnits.map((unit, index) => (
+                        <option key={unit.id} value={unit.id}>
+                          Post {index + 1}: {unit.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                <div
+                  ref={readingChatScrollRef}
+                  style={{
+                    marginTop: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    maxHeight: '48vh',
+                    overflowY: 'auto',
+                    padding: '6px 2px',
+                  }}
+                >
+                  {readingChatLoading ? (
+                    <p className="muted" style={{ margin: 0 }}>
+                      Loading chat...
+                    </p>
+                  ) : null}
+                  {readingChatError ? (
+                    <p className="error" style={{ margin: 0 }}>
+                      {readingChatError}
+                    </p>
+                  ) : null}
+                  {!readingChatLoading && readingChatTurns.length === 0 ? (
+                    <p className="muted" style={{ margin: 0 }}>
+                      Ask a short question about this fragment.
+                    </p>
+                  ) : (
+                    readingChatTurns.map((turn) => (
+                      <div key={turn.id} style={{ display: 'grid', gap: 8 }}>
+                        <div
+                          style={{
+                            alignSelf: 'flex-end',
+                            maxWidth: '86%',
+                            border: '1px solid #99f6e4',
+                            borderRadius: 12,
+                            background: '#ccfbf1',
+                            padding: '8px 10px',
+                          }}
+                        >
+                          <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{turn.userMessage}</p>
+                        </div>
+                        <div
+                          style={{
+                            alignSelf: 'flex-start',
+                            maxWidth: '86%',
+                            border: '1px solid #dbe3ec',
+                            borderRadius: 12,
+                            background: '#f8fafc',
+                            padding: '8px 10px',
+                          }}
+                        >
+                          <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{turn.assistantMessage}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <form
+                  className="row mobile-stack"
+                  style={{
+                    marginTop: 10,
+                    alignItems: 'flex-end',
+                  }}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void sendReadingClarificationMessage();
+                  }}
+                >
+                  <input
+                    value={readingChatMessage}
+                    onChange={(event) => setReadingChatMessage(event.target.value)}
+                    placeholder="Write your question..."
+                    disabled={readingChatBusy || readingChatLoading}
+                    autoFocus
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="submit"
+                    className="btn btn-sm btn-primary"
+                    disabled={
+                      readingChatBusy ||
+                      readingChatLoading ||
+                      !readingChatUnitId ||
+                      readingChatMessage.trim().length === 0
+                    }
+                  >
+                    {readingChatBusy ? 'Sending...' : 'Send'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          ) : null}
+
           <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
             {units.map((unit, index) => {
               const unitState = stateByUnit.get(unit.id);
@@ -532,7 +789,6 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
                       onPatch={patchUnitState}
                       onCompleteUnit={completeUnit}
                       onRevisionCheck={runRevisionChecks}
-                      onUnitChat={requestClarificationChat}
                       onGenerateThesisSuggestions={requestThesisSuggestions}
                       onGenerateOutline={requestOutlineGenerate}
                       onRequestWritingHint={requestWritingHint}
@@ -597,7 +853,6 @@ type UnitWorkspaceProps = {
   onPatch: (unitId: string, payload: PatchUnitStateRequest) => Promise<void>;
   onCompleteUnit: (unitId: string) => Promise<void>;
   onRevisionCheck: () => Promise<{ passes: RevisionPassResult[]; issues: RevisionIssue[] }>;
-  onUnitChat: (unitId: string, message: string) => Promise<ClarificationTurn>;
   onGenerateThesisSuggestions: (unitId: string, regenerate: boolean) => Promise<ThesisSuggestion[]>;
   onGenerateOutline: (
     unitId: string,
@@ -618,7 +873,6 @@ function UnitWorkspace({
   onPatch,
   onCompleteUnit,
   onRevisionCheck,
-  onUnitChat,
   onGenerateThesisSuggestions,
   onGenerateOutline,
   onRequestWritingHint,
@@ -628,15 +882,11 @@ function UnitWorkspace({
   const contentRef = useRef<Record<string, unknown>>({});
   const readingContainerRef = useRef<HTMLDivElement | null>(null);
   const initializedUnitRef = useRef<string | null>(null);
-  const [chatMessage, setChatMessage] = useState('');
-  const [chatTurns, setChatTurns] = useState<ClarificationTurn[]>([]);
-  const [chatBusy, setChatBusy] = useState(false);
   const [thesisSuggestions, setThesisSuggestions] = useState<ThesisSuggestion[]>([]);
   const [thesisSuggestionsBusy, setThesisSuggestionsBusy] = useState(false);
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [writingHintBusy, setWritingHintBusy] = useState(false);
   const [revisionPasses, setRevisionPasses] = useState<RevisionPassResult[]>([]);
-  const [isChatOpen, setIsChatOpen] = useState(false);
 
   useEffect(() => {
     if (initializedUnitRef.current === unit.id) {
@@ -673,15 +923,12 @@ function UnitWorkspace({
 
     initializedUnitRef.current = unit.id;
     setSaveState('idle');
-    setChatMessage('');
-    setChatTurns([]);
     setThesisSuggestions(
       Array.isArray(contentRef.current.thesisSuggestions)
         ? (contentRef.current.thesisSuggestions as ThesisSuggestion[])
         : [],
     );
     setRevisionPasses([]);
-    setIsChatOpen(false);
   }, [unit.id, unit.unitType, unit.payload, unitState?.content]);
 
   useEffect(() => {
@@ -841,97 +1088,6 @@ function UnitWorkspace({
         >
           {text}
         </div>
-        <div className="row mobile-stack">
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => setIsChatOpen(true)}>
-            Open Chat
-          </button>
-        </div>
-        {isChatOpen ? (
-          <div
-            style={{
-              position: 'fixed',
-              inset: 0,
-              background: 'rgba(15, 23, 42, 0.45)',
-              zIndex: 70,
-              display: 'grid',
-              placeItems: 'center',
-              padding: 16,
-            }}
-          >
-            <div
-              className="panel"
-              style={{
-                width: 'min(720px, 100%)',
-                maxHeight: '80vh',
-                display: 'grid',
-                gap: 10,
-                padding: 14,
-              }}
-            >
-              <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                <strong>Clarification Chat</strong>
-                <button type="button" className="btn btn-sm" onClick={() => setIsChatOpen(false)}>
-                  Close
-                </button>
-              </div>
-              <p className="muted" style={{ margin: 0 }}>
-                Ask about this reading fragment only.
-              </p>
-              <div style={{ display: 'grid', gap: 6, maxHeight: '45vh', overflow: 'auto' }}>
-                {chatTurns.length === 0 ? (
-                  <p className="muted" style={{ margin: 0 }}>
-                    Ask a short question about this fragment.
-                  </p>
-                ) : (
-                  chatTurns.map((turn) => (
-                    <div
-                      key={turn.id}
-                      style={{
-                        display: 'grid',
-                        gap: 4,
-                        border: '1px solid #dbe3ec',
-                        borderRadius: 10,
-                        padding: 8,
-                      }}
-                    >
-                      <p style={{ margin: 0, fontWeight: 600 }}>You: {turn.userMessage}</p>
-                      <p style={{ margin: 0 }}>AI: {turn.assistantMessage}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="row mobile-stack">
-                <input
-                  value={chatMessage}
-                  onChange={(event) => setChatMessage(event.target.value)}
-                  placeholder="Ask for clarification on this text..."
-                  disabled={chatBusy}
-                />
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={chatBusy || chatMessage.trim().length === 0}
-                  onClick={async () => {
-                    const message = chatMessage.trim();
-                    if (!message) {
-                      return;
-                    }
-                    setChatBusy(true);
-                    try {
-                      const turn = await onUnitChat(unit.id, message);
-                      setChatTurns((prev) => [...prev, turn]);
-                      setChatMessage('');
-                    } finally {
-                      setChatBusy(false);
-                    }
-                  }}
-                >
-                  {chatBusy ? 'Sending...' : 'Ask'}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
         <button
           type="button"
           className="btn btn-sm"

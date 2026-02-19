@@ -10,6 +10,7 @@ vi.mock('@nephix/db', async () => {
     ValidationError,
     getAssignmentUnitById: vi.fn(),
     createClarificationTurnForUnit: vi.fn(),
+    listClarificationTurnsForUnit: vi.fn(),
   };
 });
 
@@ -17,7 +18,11 @@ vi.mock('@/lib/ai/client', () => ({
   tryCompleteWithXai: vi.fn(),
 }));
 
-import { createClarificationTurnForUnit, getAssignmentUnitById } from '@nephix/db';
+import {
+  createClarificationTurnForUnit,
+  getAssignmentUnitById,
+  listClarificationTurnsForUnit,
+} from '@nephix/db';
 import { requireAuthenticatedUser } from '@/lib/auth/require-user';
 import { tryCompleteWithXai } from '@/lib/ai/client';
 
@@ -87,6 +92,7 @@ describe('POST /api/units/:unitId/chat', () => {
     vi.mocked(tryCompleteWithXai).mockResolvedValueOnce(
       'This line explains that people accept limits to gain social stability.',
     );
+    vi.mocked(listClarificationTurnsForUnit).mockResolvedValueOnce([]);
     vi.mocked(createClarificationTurnForUnit).mockResolvedValueOnce({
       id: 't1',
       unitId: 'u1',

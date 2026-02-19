@@ -1,7 +1,26 @@
 import type { ThesisSuggestion } from '@nephix/contracts';
 
 function normalizeToken(token: string): string {
-  return token.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let normalized = token.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (normalized.endsWith('ies') && normalized.length > 4) {
+    normalized = `${normalized.slice(0, -3)}y`;
+  }
+  if (normalized.endsWith('ing') && normalized.length > 5) {
+    normalized = normalized.slice(0, -3);
+  }
+  if (normalized.endsWith('ed') && normalized.length > 4) {
+    normalized = normalized.slice(0, -2);
+  }
+  if (normalized.endsWith('al') && normalized.length > 5) {
+    normalized = normalized.slice(0, -2);
+  }
+  if (normalized.endsWith('es') && normalized.length > 4) {
+    normalized = normalized.slice(0, -2);
+  }
+  if (normalized.endsWith('s') && normalized.length > 3) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
 }
 
 function tokenizeMeaningful(text: string): string[] {
@@ -32,6 +51,24 @@ function tokenizeMeaningful(text: string): string[] {
     'from',
     'or',
     'but',
+    'can',
+    'what',
+    'when',
+    'where',
+    'which',
+    'who',
+    'whom',
+    'whose',
+    'why',
+    'how',
+    'explain',
+    'mean',
+    'means',
+    'word',
+    'phrase',
+    'fragment',
+    'section',
+    'part',
   ]);
 
   return text
@@ -72,13 +109,82 @@ export function isClarificationAnchored(answer: string, sourceText: string): boo
     }
   }
 
-  return overlap >= 2;
+  return overlap >= 1;
 }
 
-export function sanitizeClarificationResponse(answer: string, sourceText: string): string {
-  const short = clampToMaxSentences(answer, 3);
+function splitSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+function truncateText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 3).trim()}...`;
+}
+
+function selectRelevantSentence(sourceText: string, question: string): string | null {
+  const questionTokens = tokenizeMeaningful(question);
+  const sentences = splitSentences(sourceText);
+  if (sentences.length === 0) {
+    return null;
+  }
+
+  let bestSentence = sentences[0];
+  let bestScore = -1;
+  for (const sentence of sentences) {
+    const sentenceTokens = new Set(tokenizeMeaningful(sentence));
+    const overlap = questionTokens.filter((token) => sentenceTokens.has(token)).length;
+    if (overlap > bestScore) {
+      bestScore = overlap;
+      bestSentence = sentence;
+    }
+  }
+
+  return truncateText(bestSentence, 180);
+}
+
+function buildClarificationFallback(sourceText: string, question: string): string {
+  const relevantSentence = selectRelevantSentence(sourceText, question);
+  const questionTokens = tokenizeMeaningful(question);
+  const focus = questionTokens[0];
+
+  if (relevantSentence && focus) {
+    return `In this fragment, "${relevantSentence}" is the relevant line. Here, "${focus}" is used in that context.`;
+  }
+  if (relevantSentence) {
+    return `In this fragment, "${relevantSentence}" is the key line for your question.`;
+  }
+
+  return 'Ask about one specific word or sentence in this fragment, and I will explain it directly.';
+}
+
+function looksLikeGenericRefusal(answer: string): boolean {
+  const lower = answer.toLowerCase();
+  return (
+    lower.includes('point to the exact part') ||
+    lower.includes('point to the exact phrase') ||
+    lower.includes('i can clarify a specific phrase') ||
+    lower.includes('i can only clarify')
+  );
+}
+
+export function sanitizeClarificationResponse(
+  answer: string,
+  sourceText: string,
+  question: string,
+): string {
+  const short = clampToMaxSentences(answer, 3).replace(/\s+/g, ' ').trim();
+  if (short.length === 0 || looksLikeGenericRefusal(short)) {
+    return buildClarificationFallback(sourceText, question);
+  }
   if (!isClarificationAnchored(short, sourceText)) {
-    return 'I can clarify a specific phrase from this fragment if you point to the exact part that is unclear.';
+    return buildClarificationFallback(sourceText, question);
   }
   return short;
 }

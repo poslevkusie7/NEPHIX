@@ -4,6 +4,7 @@ import {
   ValidationError,
   createClarificationTurnForUnit,
   getAssignmentUnitById,
+  listClarificationTurnsForUnit,
 } from '@nephix/db';
 import { unitChatRequestSchema } from '@nephix/contracts';
 import { requireAuthenticatedUser } from '@/lib/auth/require-user';
@@ -23,6 +24,24 @@ function shouldRejectScope(message: string): boolean {
     'unrelated',
   ];
   return blocked.some((entry) => lower.includes(entry));
+}
+
+export async function GET(request: Request, context: { params: Promise<{ unitId: string }> }) {
+  const user = await requireAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const params = await context.params;
+    const turns = await listClarificationTurnsForUnit(user.id, params.unitId);
+    return NextResponse.json({ turns });
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    return NextResponse.json({ error: 'Failed to load chat history.' }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request, context: { params: Promise<{ unitId: string }> }) {
@@ -47,29 +66,40 @@ export async function POST(request: Request, context: { params: Promise<{ unitId
     }
 
     const sourceText = typeof unit.payload.text === 'string' ? unit.payload.text : '';
+    const previousTurns = await listClarificationTurnsForUnit(user.id, params.unitId, 6);
+    const conversation = previousTurns.flatMap((turn) => [
+      { role: 'user' as const, content: turn.userMessage },
+      { role: 'assistant' as const, content: turn.assistantMessage },
+    ]);
+
     const aiRaw = await tryCompleteWithXai(
       [
         {
           role: 'system',
           content:
-            'You are a clarification assistant. Explain only this unit text. Keep response short (max 3 sentences), anchored to specific ideas in the text, and never rewrite/summarize the whole unit.',
+            'You are a reading clarification tutor. Answer the user question directly in at most 3 sentences. Use only the provided unit text. If asked about a word or phrase, define it plainly and tie it to this fragment. Do not ask the user to re-ask. Do not rewrite or summarize the full unit.',
         },
         {
+          role: 'system',
+          content: `UNIT TEXT:\n${sourceText}`,
+        },
+        ...conversation,
+        {
           role: 'user',
-          content: `UNIT TEXT:\n${sourceText}\n\nQUESTION:\n${payload.message}`,
+          content: payload.message,
         },
       ],
       {
         model: getXaiModelChat(),
-        temperature: 0.2,
+        temperature: 0.1,
         maxTokens: 220,
       },
     );
 
     const assistantMessage = sanitizeClarificationResponse(
-      aiRaw ??
-        'I can clarify a specific phrase from this fragment if you point to the exact part that is unclear.',
+      aiRaw ?? '',
       sourceText,
+      payload.message,
     );
 
     const turn = await createClarificationTurnForUnit(
