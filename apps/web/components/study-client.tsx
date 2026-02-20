@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   FormEvent,
   WheelEvent as ReactWheelEvent,
@@ -109,6 +109,10 @@ function useSwipeNavigation(callbacks: {
 
 export function StudyClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedAssignmentId = searchParams.get('assignmentId');
+  const requestedUnitId = searchParams.get('unitId');
+  const requestedSelectionKey = `${requestedAssignmentId ?? ''}::${requestedUnitId ?? ''}`;
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [feed, setFeed] = useState<AssignmentSummaryDTO[]>([]);
@@ -121,6 +125,7 @@ export function StudyClient() {
   const [deletingAccount, setDeletingAccount] = useState(false);
   const workspaceRef = useRef<UnitWorkspaceHandle | null>(null);
   const navigationInFlightRef = useRef(false);
+  const appliedRequestedSelectionRef = useRef<string | null>(null);
 
   const apiFetch = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -166,10 +171,16 @@ export function StudyClient() {
 
       const assignmentBody = (await assignmentResponse.json()) as { assignment: AssignmentDetailDTO };
       const stateBody = (await stateResponse.json()) as { state: AssignmentStateDTO };
+      const availableUnits = assignmentBody.assignment.units;
 
       setAssignment(assignmentBody.assignment);
       setAssignmentState(stateBody.state);
-      setViewUnitId((prev) => prev ?? stateBody.state.currentUnitId ?? assignmentBody.assignment.units[0]?.id ?? null);
+      setViewUnitId((prev) => {
+        if (prev && availableUnits.some((unit) => unit.id === prev)) {
+          return prev;
+        }
+        return stateBody.state.currentUnitId ?? availableUnits[0]?.id ?? null;
+      });
     },
     [apiFetch],
   );
@@ -220,10 +231,30 @@ export function StudyClient() {
     });
   }, [currentAssignmentId, loadAssignmentBundle]);
 
+  useEffect(() => {
+    if (feed.length === 0 || !requestedAssignmentId) {
+      return;
+    }
+    if (appliedRequestedSelectionRef.current === requestedSelectionKey) {
+      return;
+    }
+
+    appliedRequestedSelectionRef.current = requestedSelectionKey;
+    const hasRequestedAssignment = feed.some((assignment) => assignment.id === requestedAssignmentId);
+    if (!hasRequestedAssignment) {
+      return;
+    }
+
+    setCurrentAssignmentId(requestedAssignmentId);
+    setViewUnitId(requestedUnitId ?? null);
+  }, [feed, requestedAssignmentId, requestedSelectionKey, requestedUnitId]);
+
   const assignmentIndex = useMemo(
     () => feed.findIndex((item) => item.id === currentAssignmentId),
     [feed, currentAssignmentId],
   );
+  const hasPreviousAssignment = assignmentIndex > 0;
+  const hasNextAssignment = assignmentIndex >= 0 && assignmentIndex < feed.length - 1;
 
   const units = assignment?.units ?? [];
   const stateByUnit = useMemo(() => {
@@ -518,10 +549,10 @@ export function StudyClient() {
 
   const swipeHandlers = useSwipeNavigation({
     onSwipeLeft: () => {
-      void moveAssignment(-1);
+      void moveAssignment(1);
     },
     onSwipeRight: () => {
-      void moveAssignment(1);
+      void moveAssignment(-1);
     },
     onSwipeUp: () => {
       void moveUnit(1);
@@ -603,7 +634,7 @@ export function StudyClient() {
             <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                  Assignment {assignmentIndex + 1}/{feed.length} • Swipe/scroll left-right for next assignment
+                  Assignment {assignmentIndex + 1}/{feed.length} • One assignment per screen
                 </p>
                 <h2 style={{ margin: '4px 0 0' }}>{assignment.title}</h2>
                 <p className="muted" style={{ margin: '4px 0 0' }}>
@@ -632,10 +663,20 @@ export function StudyClient() {
             </div>
 
             <div className="row mobile-stack" style={{ marginTop: 12 }}>
-              <button type="button" className="btn" onClick={() => void moveAssignment(-1)}>
-                Prev Assignment
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void moveAssignment(-1)}
+                disabled={!hasPreviousAssignment}
+              >
+                Previous Assignment
               </button>
-              <button type="button" className="btn" onClick={() => void moveAssignment(1)}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void moveAssignment(1)}
+                disabled={!hasNextAssignment}
+              >
                 Next Assignment
               </button>
               {currentUnit.unitType === 'reading' ? (

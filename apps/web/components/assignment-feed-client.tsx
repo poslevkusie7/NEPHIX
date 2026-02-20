@@ -31,7 +31,7 @@ function AssignmentCard({ assignment }: { assignment: AssignmentSummaryDTO }) {
 
   return (
     <Link
-      href={`/study/${assignment.id}`}
+      href={`/study?assignmentId=${encodeURIComponent(assignment.id)}`}
       className="panel"
       style={{
         textDecoration: 'none',
@@ -278,7 +278,7 @@ export function AssignmentFeedClient() {
               {bookmarks.map((bookmark) => (
                 <Link
                   key={bookmark.unitId}
-                  href={`/study/${bookmark.assignmentId}?unitId=${bookmark.unitId}`}
+                  href={`/study?assignmentId=${encodeURIComponent(bookmark.assignmentId)}&unitId=${encodeURIComponent(bookmark.unitId)}`}
                   className="panel"
                   style={{
                     textDecoration: 'none',

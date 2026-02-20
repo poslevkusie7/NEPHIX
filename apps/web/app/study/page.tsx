@@ -1,5 +1,5 @@
-import { AssignmentFeedClient } from '@/components/assignment-feed-client';
+import { StudyClient } from '@/components/study-client';
 
 export default function StudyPage() {
-  return <AssignmentFeedClient />;
+  return <StudyClient />;
 }
