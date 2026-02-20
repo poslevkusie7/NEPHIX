@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import {
   FormEvent,
   WheelEvent as ReactWheelEvent,
@@ -25,6 +25,11 @@ import type {
   UserUnitStateDTO,
 } from '@nephix/contracts';
 import { CardShell, UnitStatusBadge } from '@nephix/ui';
+
+type StudyClientProps = {
+  initialAssignmentId?: string | null;
+  initialUnitId?: string | null;
+};
 
 function countWords(text: string): number {
   return text
@@ -107,11 +112,13 @@ function useSwipeNavigation(callbacks: {
   };
 }
 
-export function StudyClient() {
+export function StudyClient({
+  initialAssignmentId = null,
+  initialUnitId = null,
+}: StudyClientProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const requestedAssignmentId = searchParams.get('assignmentId');
-  const requestedUnitId = searchParams.get('unitId');
+  const requestedAssignmentId = initialAssignmentId;
+  const requestedUnitId = initialUnitId;
   const requestedSelectionKey = `${requestedAssignmentId ?? ''}::${requestedUnitId ?? ''}`;
 
   const [userEmail, setUserEmail] = useState<string | null>(null);

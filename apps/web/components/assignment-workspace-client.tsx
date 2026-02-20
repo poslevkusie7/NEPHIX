@@ -134,7 +134,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     void loadInitial();
   }, [loadInitial]);
 
-  const units = assignment?.units ?? [];
+  const units = useMemo(() => assignment?.units ?? [], [assignment]);
   const readingUnits = useMemo(
     () => units.filter((unit) => unit.unitType === 'reading'),
     [units],
@@ -297,31 +297,37 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     };
   }
 
-  async function requestClarificationChat(unitId: string, message: string): Promise<ClarificationTurn> {
-    const response = await apiFetch(`/api/units/${unitId}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ message }),
-    });
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(body?.error ?? 'Failed to send clarification request.');
-    }
-    const body = (await response.json()) as { turn: ClarificationTurn };
-    return body.turn;
-  }
+  const requestClarificationChat = useCallback(
+    async (unitId: string, message: string): Promise<ClarificationTurn> => {
+      const response = await apiFetch(`/api/units/${unitId}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to send clarification request.');
+      }
+      const body = (await response.json()) as { turn: ClarificationTurn };
+      return body.turn;
+    },
+    [apiFetch],
+  );
 
-  async function requestClarificationHistory(unitId: string): Promise<ClarificationTurn[]> {
-    const response = await apiFetch(`/api/units/${unitId}/chat`);
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(body?.error ?? 'Failed to load chat history.');
-    }
-    const body = (await response.json()) as { turns?: ClarificationTurn[] };
-    return Array.isArray(body.turns) ? body.turns : [];
-  }
+  const requestClarificationHistory = useCallback(
+    async (unitId: string): Promise<ClarificationTurn[]> => {
+      const response = await apiFetch(`/api/units/${unitId}/chat`);
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to load chat history.');
+      }
+      const body = (await response.json()) as { turns?: ClarificationTurn[] };
+      return Array.isArray(body.turns) ? body.turns : [];
+    },
+    [apiFetch],
+  );
 
   async function requestThesisSuggestions(
     unitId: string,
@@ -391,7 +397,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
       .finally(() => {
         setReadingChatLoading(false);
       });
-  }, [isReadingChatOpen, readingChatUnitId]);
+  }, [isReadingChatOpen, readingChatUnitId, requestClarificationHistory]);
 
   useEffect(() => {
     if (!isReadingChatOpen) {
