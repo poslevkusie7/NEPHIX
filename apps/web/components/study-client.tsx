@@ -19,6 +19,7 @@ import type {
   AssignmentStateDTO,
   AssignmentSummaryDTO,
   BookmarkUnitRequest,
+  ClarificationTurn,
   CompleteUnitResponse,
   PatchUnitStateRequest,
   RevisionIssue,
@@ -45,8 +46,8 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 type SwipeHandlers = {
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
-  onPointerUp: () => void;
-  onPointerCancel: () => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
 type UnitWorkspaceHandle = {
@@ -61,16 +62,20 @@ function useSwipeNavigation(callbacks: {
 }): SwipeHandlers {
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const currentRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
 
   const reset = () => {
     startRef.current = null;
     currentRef.current = null;
+    pointerIdRef.current = null;
   };
 
   return {
     onPointerDown: (event) => {
       startRef.current = { x: event.clientX, y: event.clientY };
       currentRef.current = { x: event.clientX, y: event.clientY };
+      pointerIdRef.current = event.pointerId;
+      event.currentTarget.setPointerCapture(event.pointerId);
     },
     onPointerMove: (event) => {
       if (!startRef.current) {
@@ -78,7 +83,14 @@ function useSwipeNavigation(callbacks: {
       }
       currentRef.current = { x: event.clientX, y: event.clientY };
     },
-    onPointerUp: () => {
+    onPointerUp: (event) => {
+      if (
+        pointerIdRef.current !== null &&
+        event.currentTarget.hasPointerCapture(pointerIdRef.current)
+      ) {
+        event.currentTarget.releasePointerCapture(pointerIdRef.current);
+      }
+
       if (!startRef.current || !currentRef.current) {
         reset();
         return;
@@ -108,7 +120,15 @@ function useSwipeNavigation(callbacks: {
 
       reset();
     },
-    onPointerCancel: reset,
+    onPointerCancel: (event) => {
+      if (
+        pointerIdRef.current !== null &&
+        event.currentTarget.hasPointerCapture(pointerIdRef.current)
+      ) {
+        event.currentTarget.releasePointerCapture(pointerIdRef.current);
+      }
+      reset();
+    },
   };
 }
 
@@ -130,9 +150,19 @@ export function StudyClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const [isReadingChatOpen, setIsReadingChatOpen] = useState(false);
+  const [readingChatUnitId, setReadingChatUnitId] = useState<string | null>(null);
+  const [readingChatMessage, setReadingChatMessage] = useState('');
+  const [readingChatTurns, setReadingChatTurns] = useState<ClarificationTurn[]>([]);
+  const [readingChatLoading, setReadingChatLoading] = useState(false);
+  const [readingChatBusy, setReadingChatBusy] = useState(false);
+  const [readingChatError, setReadingChatError] = useState<string | null>(null);
   const workspaceRef = useRef<UnitWorkspaceHandle | null>(null);
   const navigationInFlightRef = useRef(false);
   const appliedRequestedSelectionRef = useRef<string | null>(null);
+  const readingChatScrollRef = useRef<HTMLDivElement | null>(null);
+  const moveAssignmentRef = useRef<(delta: number) => Promise<void>>(async () => undefined);
+  const moveUnitRef = useRef<(delta: number) => Promise<void>>(async () => undefined);
 
   const apiFetch = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -260,10 +290,12 @@ export function StudyClient({
     () => feed.findIndex((item) => item.id === currentAssignmentId),
     [feed, currentAssignmentId],
   );
-  const hasPreviousAssignment = assignmentIndex > 0;
-  const hasNextAssignment = assignmentIndex >= 0 && assignmentIndex < feed.length - 1;
 
-  const units = assignment?.units ?? [];
+  const units = useMemo(() => assignment?.units ?? [], [assignment]);
+  const readingUnits = useMemo(
+    () => units.filter((unit) => unit.unitType === 'reading'),
+    [units],
+  );
   const stateByUnit = useMemo(() => {
     const entries = assignmentState?.unitStates ?? [];
     return new Map(entries.map((entry) => [entry.unitId, entry]));
@@ -277,6 +309,8 @@ export function StudyClient({
     : -1;
   const currentUnit = viewUnitIndex >= 0 ? units[viewUnitIndex] : null;
   const currentUnitState = currentUnit ? stateByUnit.get(currentUnit.id) : undefined;
+  const selectedReadingUnit =
+    readingUnits.find((unit) => unit.id === readingChatUnitId) ?? readingUnits[0] ?? null;
 
   async function persistCurrentUnitBeforeNavigation(): Promise<boolean> {
     if (!workspaceRef.current) {
@@ -287,25 +321,6 @@ export function StudyClient({
     if (!persisted) {
       setError('Could not save your current unit. Please try again.');
       return false;
-    }
-
-    return true;
-  }
-
-  function canOpenUnit(index: number): boolean {
-    if (!assignmentState) {
-      return false;
-    }
-
-    if (index <= activeUnitIndex) {
-      return true;
-    }
-
-    for (let i = 0; i < index; i += 1) {
-      const status = stateByUnit.get(units[i].id)?.status ?? 'unread';
-      if (status !== 'completed') {
-        return false;
-      }
     }
 
     return true;
@@ -350,8 +365,7 @@ export function StudyClient({
     }
 
     const targetIndex = viewUnitIndex + delta;
-    const shouldAutoCompleteActiveUnitOnForwardNavigation = delta > 0 && currentUnit.id === activeUnitId;
-    if (!shouldAutoCompleteActiveUnitOnForwardNavigation && (targetIndex < 0 || targetIndex >= units.length)) {
+    if (targetIndex < 0 || targetIndex >= units.length) {
       return;
     }
 
@@ -362,24 +376,15 @@ export function StudyClient({
         return;
       }
 
-      if (shouldAutoCompleteActiveUnitOnForwardNavigation) {
-        const completed = await completeCurrentUnitAndRefresh();
-        if (!completed) {
-          return;
-        }
-        return;
-      }
-
-      if (!canOpenUnit(targetIndex)) {
-        return;
-      }
-
       setError(null);
       setViewUnitId(units[targetIndex].id);
     } finally {
       navigationInFlightRef.current = false;
     }
   }
+
+  moveAssignmentRef.current = moveAssignment;
+  moveUnitRef.current = moveUnit;
 
   async function completeCurrentUnitAndRefresh(): Promise<boolean> {
     if (!currentUnit) {
@@ -518,6 +523,59 @@ export function StudyClient({
     return body.issues;
   }
 
+  const requestClarificationChat = useCallback(
+    async (unitId: string, message: string): Promise<ClarificationTurn> => {
+      const response = await apiFetch(`/api/units/${unitId}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to send clarification request.');
+      }
+
+      const body = (await response.json()) as { turn: ClarificationTurn };
+      return body.turn;
+    },
+    [apiFetch],
+  );
+
+  const requestClarificationHistory = useCallback(
+    async (unitId: string): Promise<ClarificationTurn[]> => {
+      const response = await apiFetch(`/api/units/${unitId}/chat`);
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to load chat history.');
+      }
+
+      const body = (await response.json()) as { turns?: ClarificationTurn[] };
+      return Array.isArray(body.turns) ? body.turns : [];
+    },
+    [apiFetch],
+  );
+
+  async function sendReadingClarificationMessage() {
+    const message = readingChatMessage.trim();
+    if (!message || !readingChatUnitId || readingChatBusy || readingChatLoading) {
+      return;
+    }
+
+    setReadingChatBusy(true);
+    setReadingChatError(null);
+    try {
+      const turn = await requestClarificationChat(readingChatUnitId, message);
+      setReadingChatTurns((previous) => [...previous, turn]);
+      setReadingChatMessage('');
+    } catch (chatError) {
+      setReadingChatError(chatError instanceof Error ? chatError.message : 'Failed to send clarification request.');
+    } finally {
+      setReadingChatBusy(false);
+    }
+  }
+
   async function logout(event: FormEvent) {
     event.preventDefault();
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -568,6 +626,96 @@ export function StudyClient({
       void moveUnit(-1);
     },
   });
+
+  useEffect(() => {
+    if (readingUnits.length === 0) {
+      setReadingChatUnitId(null);
+      return;
+    }
+
+    if (currentUnit?.unitType === 'reading') {
+      setReadingChatUnitId(currentUnit.id);
+      return;
+    }
+
+    const preferredUnitId =
+      activeUnitId && readingUnits.some((unit) => unit.id === activeUnitId)
+        ? activeUnitId
+        : readingUnits[0]?.id ?? null;
+    setReadingChatUnitId(preferredUnitId);
+  }, [activeUnitId, currentUnit?.id, currentUnit?.unitType, readingUnits]);
+
+  useEffect(() => {
+    if (!isReadingChatOpen || !readingChatUnitId) {
+      return;
+    }
+
+    setReadingChatLoading(true);
+    setReadingChatError(null);
+    requestClarificationHistory(readingChatUnitId)
+      .then((turns) => {
+        setReadingChatTurns(turns);
+      })
+      .catch((chatError: unknown) => {
+        setReadingChatError(chatError instanceof Error ? chatError.message : 'Failed to load chat history.');
+      })
+      .finally(() => {
+        setReadingChatLoading(false);
+      });
+  }, [isReadingChatOpen, readingChatUnitId, requestClarificationHistory]);
+
+  useEffect(() => {
+    if (!isReadingChatOpen) {
+      return;
+    }
+
+    const element = readingChatScrollRef.current;
+    if (!element) {
+      return;
+    }
+
+    element.scrollTop = element.scrollHeight;
+  }, [isReadingChatOpen, readingChatTurns]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tagName = target.tagName;
+        if (
+          tagName === 'INPUT' ||
+          tagName === 'TEXTAREA' ||
+          tagName === 'SELECT' ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        void moveAssignmentRef.current(-1);
+        return;
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        void moveAssignmentRef.current(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        void moveUnitRef.current(-1);
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        void moveUnitRef.current(1);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   function onFeedWheel(event: ReactWheelEvent<HTMLElement>) {
     const absX = Math.abs(event.deltaX);
@@ -641,7 +789,7 @@ export function StudyClient({
             <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                  Assignment {assignmentIndex + 1}/{feed.length} • One assignment per screen
+                  Assignment {assignmentIndex + 1}/{feed.length} • Swipe left/right or use ← →
                 </p>
                 <h2 style={{ margin: '4px 0 0' }}>{assignment.title}</h2>
                 <p className="muted" style={{ margin: '4px 0 0' }}>
@@ -670,22 +818,29 @@ export function StudyClient({
             </div>
 
             <div className="row mobile-stack" style={{ marginTop: 12 }}>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => void moveAssignment(-1)}
-                disabled={!hasPreviousAssignment}
-              >
-                Previous Assignment
+              <button type="button" className="btn" onClick={() => void moveUnit(-1)} disabled={viewUnitIndex <= 0}>
+                Previous Unit
               </button>
               <button
                 type="button"
                 className="btn"
-                onClick={() => void moveAssignment(1)}
-                disabled={!hasNextAssignment}
+                onClick={() => void moveUnit(1)}
+                disabled={viewUnitIndex < 0 || viewUnitIndex >= units.length - 1}
               >
-                Next Assignment
+                Next Unit
               </button>
+              {readingUnits.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-soft"
+                  onClick={() => {
+                    setIsReadingChatOpen(true);
+                    setReadingChatError(null);
+                  }}
+                >
+                  Open Clarification Chat
+                </button>
+              ) : null}
               {currentUnit.unitType === 'reading' ? (
                 <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
                   {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
@@ -713,7 +868,7 @@ export function StudyClient({
             )}
 
             <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-              Unit {viewUnitIndex + 1}/{units.length} • Swipe/scroll up-down for next unit
+              Unit {viewUnitIndex + 1}/{units.length} • Swipe/scroll up-down or use ↑ ↓
             </p>
 
             <div style={{ marginTop: 14 }}>
@@ -728,6 +883,136 @@ export function StudyClient({
                 onRevisionCheck={runRevisionChecks}
               />
             </div>
+
+            {isReadingChatOpen && selectedReadingUnit ? (
+              <div
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(15, 23, 42, 0.45)',
+                  zIndex: 70,
+                  display: 'grid',
+                  placeItems: 'center',
+                  padding: 16,
+                }}
+              >
+                <div
+                  className="panel"
+                  style={{
+                    width: 'min(760px, 100%)',
+                    maxHeight: '80vh',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: 14,
+                    overflow: 'hidden',
+                  }}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Clarification chat"
+                >
+                  <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                    <strong>Clarification Chat</strong>
+                    <button type="button" className="btn btn-sm" onClick={() => setIsReadingChatOpen(false)}>
+                      Close
+                    </button>
+                  </div>
+                  <p className="muted" style={{ margin: 0 }}>
+                    Ask any question. Chat answers are capped at 10 words.
+                  </p>
+
+                  <div
+                    ref={readingChatScrollRef}
+                    style={{
+                      marginTop: 10,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      maxHeight: '48vh',
+                      overflowY: 'auto',
+                      padding: '6px 2px',
+                    }}
+                  >
+                    {readingChatLoading ? (
+                      <p className="muted" style={{ margin: 0 }}>
+                        Loading chat...
+                      </p>
+                    ) : null}
+                    {readingChatError ? (
+                      <p className="error" style={{ margin: 0 }}>
+                        {readingChatError}
+                      </p>
+                    ) : null}
+                    {!readingChatLoading && readingChatTurns.length === 0 ? (
+                      <p className="muted" style={{ margin: 0 }}>
+                        Example input: What is the main idea here?
+                      </p>
+                    ) : (
+                      readingChatTurns.map((turn) => (
+                        <div key={turn.id} style={{ display: 'grid', gap: 8 }}>
+                          <div
+                            style={{
+                              alignSelf: 'flex-end',
+                              maxWidth: '86%',
+                              border: '1px solid #99f6e4',
+                              borderRadius: 12,
+                              background: '#ccfbf1',
+                              padding: '8px 10px',
+                            }}
+                          >
+                            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{turn.userMessage}</p>
+                          </div>
+                          <div
+                            style={{
+                              alignSelf: 'flex-start',
+                              maxWidth: '86%',
+                              border: '1px solid #dbe3ec',
+                              borderRadius: 12,
+                              background: '#f8fafc',
+                              padding: '8px 10px',
+                            }}
+                          >
+                            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{turn.assistantMessage}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <form
+                    className="row mobile-stack"
+                    style={{
+                      marginTop: 10,
+                      alignItems: 'flex-end',
+                    }}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void sendReadingClarificationMessage();
+                    }}
+                  >
+                    <input
+                      value={readingChatMessage}
+                      onChange={(event) => setReadingChatMessage(event.target.value)}
+                      placeholder="Type your question..."
+                      disabled={readingChatBusy || readingChatLoading}
+                      autoFocus
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-sm btn-primary"
+                      disabled={
+                        readingChatBusy ||
+                        readingChatLoading ||
+                        !readingChatUnitId ||
+                        readingChatMessage.trim().length === 0
+                      }
+                    >
+                      {readingChatBusy ? 'Sending...' : 'Send'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            ) : null}
           </>
         ) : (
           <p className="muted">No active assignment in the feed yet.</p>
@@ -903,7 +1188,7 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
           {text}
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
-          Chat/AI clarification is planned for phase 2; current MVP keeps authoritative text unchanged.
+          Use &quot;Open Clarification Chat&quot; for AI help without changing source text.
         </p>
       </CardShell>
     );
