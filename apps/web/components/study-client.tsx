@@ -23,6 +23,7 @@ import type {
   CompleteUnitResponse,
   PatchUnitStateRequest,
   RevisionIssue,
+  ThesisSuggestion,
   UserUnitStateDTO,
 } from '@nephix/contracts';
 import { CardShell, UnitStatusBadge } from '@nephix/ui';
@@ -43,11 +44,23 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isSwipeIgnoredTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+
+  return Boolean(
+    target.closest(
+      'button, input, textarea, select, option, label, a, summary, [role="button"], [data-no-swipe="true"]',
+    ),
+  );
+}
+
 type SwipeHandlers = {
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
-  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
-  onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
 };
 
 type UnitWorkspaceHandle = {
@@ -62,20 +75,21 @@ function useSwipeNavigation(callbacks: {
 }): SwipeHandlers {
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const currentRef = useRef<{ x: number; y: number } | null>(null);
-  const pointerIdRef = useRef<number | null>(null);
 
   const reset = () => {
     startRef.current = null;
     currentRef.current = null;
-    pointerIdRef.current = null;
   };
 
   return {
     onPointerDown: (event) => {
+      if (isSwipeIgnoredTarget(event.target)) {
+        reset();
+        return;
+      }
+
       startRef.current = { x: event.clientX, y: event.clientY };
       currentRef.current = { x: event.clientX, y: event.clientY };
-      pointerIdRef.current = event.pointerId;
-      event.currentTarget.setPointerCapture(event.pointerId);
     },
     onPointerMove: (event) => {
       if (!startRef.current) {
@@ -83,14 +97,7 @@ function useSwipeNavigation(callbacks: {
       }
       currentRef.current = { x: event.clientX, y: event.clientY };
     },
-    onPointerUp: (event) => {
-      if (
-        pointerIdRef.current !== null &&
-        event.currentTarget.hasPointerCapture(pointerIdRef.current)
-      ) {
-        event.currentTarget.releasePointerCapture(pointerIdRef.current);
-      }
-
+    onPointerUp: () => {
       if (!startRef.current || !currentRef.current) {
         reset();
         return;
@@ -120,13 +127,7 @@ function useSwipeNavigation(callbacks: {
 
       reset();
     },
-    onPointerCancel: (event) => {
-      if (
-        pointerIdRef.current !== null &&
-        event.currentTarget.hasPointerCapture(pointerIdRef.current)
-      ) {
-        event.currentTarget.releasePointerCapture(pointerIdRef.current);
-      }
+    onPointerCancel: () => {
       reset();
     },
   };
@@ -557,6 +558,64 @@ export function StudyClient({
     [apiFetch],
   );
 
+  const requestThesisSuggestions = useCallback(
+    async (unitId: string, regenerate: boolean): Promise<ThesisSuggestion[]> => {
+      const response = await apiFetch(`/api/units/${unitId}/thesis-suggestions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ regenerate }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to generate thesis suggestions.');
+      }
+
+      const body = (await response.json()) as { suggestions?: ThesisSuggestion[] };
+      return Array.isArray(body.suggestions) ? body.suggestions : [];
+    },
+    [apiFetch],
+  );
+
+  const requestOutlineGenerate = useCallback(
+    async (unitId: string): Promise<Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>> => {
+      const response = await apiFetch(`/api/units/${unitId}/outline-generate`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to generate outline.');
+      }
+
+      const body = (await response.json()) as {
+        sections?: Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>;
+      };
+      return Array.isArray(body.sections) ? body.sections : [];
+    },
+    [apiFetch],
+  );
+
+  const requestWritingHint = useCallback(
+    async (unitId: string, currentSectionText: string): Promise<string> => {
+      const response = await apiFetch(`/api/units/${unitId}/writing-hint`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ currentSectionText }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? 'Failed to generate writing hint.');
+      }
+
+      const body = (await response.json()) as { hint?: { text?: string } };
+      return typeof body.hint?.text === 'string' ? body.hint.text : '';
+    },
+    [apiFetch],
+  );
+
   async function sendReadingClarificationMessage() {
     const message = readingChatMessage.trim();
     if (!message || !readingChatUnitId || readingChatBusy || readingChatLoading) {
@@ -881,6 +940,9 @@ export function StudyClient({
                 isActive={currentUnit.id === activeUnitId}
                 onPatch={patchUnitState}
                 onRevisionCheck={runRevisionChecks}
+                onGenerateThesisSuggestions={requestThesisSuggestions}
+                onGenerateOutline={requestOutlineGenerate}
+                onRequestWritingHint={requestWritingHint}
               />
             </div>
 
@@ -1030,6 +1092,11 @@ type UnitWorkspaceProps = {
   isActive: boolean;
   onPatch: (unitId: string, payload: PatchUnitStateRequest) => Promise<void>;
   onRevisionCheck: () => Promise<RevisionIssue[]>;
+  onGenerateThesisSuggestions: (unitId: string, regenerate: boolean) => Promise<ThesisSuggestion[]>;
+  onGenerateOutline: (
+    unitId: string,
+  ) => Promise<Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>>;
+  onRequestWritingHint: (unitId: string, currentSectionText: string) => Promise<string>;
 };
 
 const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(function UnitWorkspace({
@@ -1040,10 +1107,17 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
   isActive,
   onPatch,
   onRevisionCheck,
+  onGenerateThesisSuggestions,
+  onGenerateOutline,
+  onRequestWritingHint,
 }, ref) {
   const [content, setContent] = useState<Record<string, unknown>>({});
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   const readingContainerRef = useRef<HTMLDivElement | null>(null);
+  const [thesisSuggestions, setThesisSuggestions] = useState<ThesisSuggestion[]>([]);
+  const [thesisSuggestionsBusy, setThesisSuggestionsBusy] = useState(false);
+  const [outlineBusy, setOutlineBusy] = useState(false);
+  const [writingHintBusy, setWritingHintBusy] = useState(false);
 
   useEffect(() => {
     const existing = unitState?.content;
@@ -1066,6 +1140,33 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
 
     setSaveState('idle');
   }, [unit.id, unit.unitType, unit.payload, unitState?.updatedAtISO, unitState?.content]);
+
+  useEffect(() => {
+    if (unit.unitType !== 'thesis') {
+      setThesisSuggestions([]);
+      return;
+    }
+
+    const rawSuggestions = Array.isArray(content.thesisSuggestions) ? content.thesisSuggestions : [];
+    const suggestions: ThesisSuggestion[] = rawSuggestions
+      .map((entry, index) => {
+        if (!isObjectRecord(entry)) {
+          return null;
+        }
+
+        const text = typeof entry.text === 'string' ? entry.text : '';
+        if (!text) {
+          return null;
+        }
+
+        return {
+          id: typeof entry.id === 'string' && entry.id ? entry.id : `suggestion-${index + 1}`,
+          text,
+        };
+      })
+      .filter((entry): entry is ThesisSuggestion => Boolean(entry));
+    setThesisSuggestions(suggestions);
+  }, [content, unit.unitType]);
 
   useEffect(() => {
     if (unit.unitType !== 'reading') {
@@ -1209,6 +1310,69 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
             disabled={!isActive}
           />
         </label>
+        <div className="row mobile-stack">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!isActive || thesisSuggestionsBusy}
+            onClick={async () => {
+              setThesisSuggestionsBusy(true);
+              try {
+                const suggestions = await onGenerateThesisSuggestions(unit.id, false);
+                setThesisSuggestions(suggestions);
+                updateContent({ thesisSuggestions: suggestions });
+              } catch {
+                setSaveState('error');
+              } finally {
+                setThesisSuggestionsBusy(false);
+              }
+            }}
+          >
+            {thesisSuggestionsBusy ? 'Generating...' : 'Generate thesis ideas'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!isActive || thesisSuggestionsBusy}
+            onClick={async () => {
+              setThesisSuggestionsBusy(true);
+              try {
+                const suggestions = await onGenerateThesisSuggestions(unit.id, true);
+                setThesisSuggestions(suggestions);
+                updateContent({ thesisSuggestions: suggestions });
+              } catch {
+                setSaveState('error');
+              } finally {
+                setThesisSuggestionsBusy(false);
+              }
+            }}
+          >
+            Regenerate
+          </button>
+        </div>
+        {thesisSuggestions.length > 0 ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {thesisSuggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                className="btn btn-soft"
+                style={{
+                  textAlign: 'left',
+                  borderColor: suggestion.text === thesis ? '#0d9488' : undefined,
+                }}
+                disabled={!isActive}
+                onClick={() => {
+                  updateContent({
+                    thesis: suggestion.text,
+                  });
+                }}
+              >
+                {suggestion.text}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <label className="row" style={{ alignItems: 'center' }}>
           <input
             type="checkbox"
@@ -1234,6 +1398,26 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
 
     return (
       <CardShell title={unit.title} subtitle="Adjust section plan while staying close to target word balance.">
+        <div className="row mobile-stack">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!isActive || outlineBusy}
+            onClick={async () => {
+              setOutlineBusy(true);
+              try {
+                const generated = await onGenerateOutline(unit.id);
+                updateContent({ sections: generated });
+              } catch {
+                setSaveState('error');
+              } finally {
+                setOutlineBusy(false);
+              }
+            }}
+          >
+            {outlineBusy ? 'Generating...' : 'Generate outline'}
+          </button>
+        </div>
         <div className="outline-table-wrap">
           <table className="outline-table">
             <thead>
@@ -1338,6 +1522,7 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
     const text = typeof content.text === 'string' ? content.text : '';
     const confirmed = Boolean(content.confirmed);
     const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
+    const hint = typeof content.writingHint === 'string' ? content.writingHint : '';
 
     return (
       <CardShell title={unit.title} subtitle="Draft this section only. Focus on ideas and flow first.">
@@ -1345,6 +1530,43 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
           <p className="muted" style={{ marginTop: 0 }}>
             {unit.payload.guidingQuestion}
           </p>
+        ) : null}
+        <div className="row mobile-stack">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!isActive || writingHintBusy}
+            onClick={async () => {
+              setWritingHintBusy(true);
+              try {
+                const nextHint = await onRequestWritingHint(unit.id, text);
+                if (nextHint) {
+                  updateContent({ writingHint: nextHint });
+                }
+              } catch {
+                setSaveState('error');
+              } finally {
+                setWritingHintBusy(false);
+              }
+            }}
+          >
+            {writingHintBusy ? 'Generating...' : 'Suggest a hint'}
+          </button>
+        </div>
+        {hint ? (
+          <div
+            style={{
+              border: '1px solid #dbe3ec',
+              borderRadius: 12,
+              padding: 10,
+              background: '#f8fafc',
+            }}
+          >
+            <p className="muted" style={{ margin: 0 }}>
+              Hint
+            </p>
+            <p style={{ margin: '4px 0 0' }}>{hint}</p>
+          </div>
         ) : null}
         <label className="field">
           <span>Draft text</span>
