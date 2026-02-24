@@ -479,37 +479,6 @@ export function StudyClient({
     });
   }
 
-  async function completeUnit() {
-    if (navigationInFlightRef.current) {
-      return;
-    }
-
-    if (!currentUnit) {
-      return;
-    }
-
-    if (currentUnit.id !== activeUnitId) {
-      setError('Only the active unit can be completed.');
-      return;
-    }
-
-    navigationInFlightRef.current = true;
-
-    try {
-      const canContinue = await persistCurrentUnitBeforeNavigation();
-      if (!canContinue) {
-        return;
-      }
-
-      const completed = await completeCurrentUnitAndRefresh();
-      if (!completed) {
-        return;
-      }
-    } finally {
-      navigationInFlightRef.current = false;
-    }
-  }
-
   async function runRevisionChecks(): Promise<RevisionIssue[]> {
     if (!currentAssignmentId) {
       return [];
@@ -903,16 +872,6 @@ export function StudyClient({
               {currentUnit.unitType === 'reading' ? (
                 <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
                   {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
-                </button>
-              ) : null}
-              {currentUnit.unitType === 'reading' ? (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={completeUnit}
-                  disabled={currentUnit.id !== activeUnitId}
-                >
-                  Mark Complete
                 </button>
               ) : null}
             </div>
