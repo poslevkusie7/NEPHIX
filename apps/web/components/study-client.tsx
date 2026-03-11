@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import {
-  FormEvent,
+  type ReactNode,
   WheelEvent as ReactWheelEvent,
   forwardRef,
   PointerEvent as ReactPointerEvent,
@@ -26,7 +26,6 @@ import type {
   ThesisSuggestion,
   UserUnitStateDTO,
 } from '@nephix/contracts';
-import { CardShell, UnitStatusBadge } from '@nephix/ui';
 
 type StudyClientProps = {
   initialAssignmentId?: string | null;
@@ -66,6 +65,119 @@ type SwipeHandlers = {
 type UnitWorkspaceHandle = {
   persist: () => Promise<boolean>;
 };
+
+type EssayCardShellProps = {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  noHeaderDivider?: boolean;
+};
+
+function EssayCardShell({ title: _title, subtitle: _subtitle, children, footer, noHeaderDivider = false }: EssayCardShellProps) {
+  return (
+    <section className={`essay-unit-card${noHeaderDivider ? ' no-header-divider' : ''}`}>
+      <div className="essay-unit-card-body">{children}</div>
+      {footer ? <footer className="essay-unit-card-footer">{footer}</footer> : null}
+    </section>
+  );
+}
+
+function getEssayStepLabel(unit: AssignmentDetailDTO['units'][number]): string {
+  if (unit.unitType === 'thesis') {
+    return 'Thesis';
+  }
+  if (unit.unitType === 'outline') {
+    return 'Outline';
+  }
+  if (unit.unitType === 'revise') {
+    return 'Revise';
+  }
+  if (unit.unitType === 'writing') {
+    const title = unit.title.toLowerCase();
+    if (title.includes('intro')) {
+      return 'Intro';
+    }
+    if (title.includes('conclusion')) {
+      return 'Conclusion';
+    }
+    if (title.includes('body') && title.includes('1')) {
+      return 'Body 1';
+    }
+    if (title.includes('body') && title.includes('2')) {
+      return 'Body 2';
+    }
+    if (title.includes('body') && title.includes('3')) {
+      return 'Body 3';
+    }
+    return 'Writing';
+  }
+  return unit.title;
+}
+
+function getSuggestionThemeTag(text: string, index: number): string {
+  const normalized = text.toLowerCase();
+  if (normalized.includes('social') || normalized.includes('class') || normalized.includes('mobility')) {
+    return 'SOCIAL MOBILITY';
+  }
+  if (normalized.includes('love') || normalized.includes('romantic') || normalized.includes('ruth')) {
+    return 'ROMANTIC IDEALIZATION';
+  }
+  if (normalized.includes('individual') || normalized.includes('independ') || normalized.includes('isolation')) {
+    return 'INDIVIDUALISM';
+  }
+  const fallback = ['AMBITION', 'IDENTITY', 'CONFLICT'];
+  return fallback[index % fallback.length];
+}
+
+function getOutlineSectionLabel(title: string, index: number): string {
+  const normalized = title.toLowerCase();
+  if (normalized.includes('intro')) {
+    return 'Introduction';
+  }
+  if (normalized.includes('conclusion')) {
+    return 'Conclusion';
+  }
+  if (normalized.includes('body') && normalized.includes('1')) {
+    return 'Body 1';
+  }
+  if (normalized.includes('body') && normalized.includes('2')) {
+    return 'Body 2';
+  }
+  if (normalized.includes('body') && normalized.includes('3')) {
+    return 'Body 3';
+  }
+  return `Section ${index + 1}`;
+}
+
+function getOutlineLengthHint(targetWords: number): string {
+  if (targetWords > 0) {
+    return `~${targetWords} words`;
+  }
+  return '~150 words';
+}
+
+function getWritingUnitLabel(title: string): string {
+  const normalized = title.toLowerCase();
+  if (normalized.includes('intro')) {
+    return 'INTRODUCTION';
+  }
+  if (normalized.includes('conclusion')) {
+    return 'CONCLUSION';
+  }
+  if (normalized.includes('body') && normalized.includes('1')) {
+    return 'BODY PARAGRAPH 1';
+  }
+  if (normalized.includes('body') && normalized.includes('2')) {
+    return 'BODY PARAGRAPH 2';
+  }
+  if (normalized.includes('body') && normalized.includes('3')) {
+    return 'BODY PARAGRAPH 3';
+  }
+  return title.toUpperCase();
+}
+
+type RevisionFocus = 'clarity' | 'structure' | 'argument' | 'style';
 
 function useSwipeNavigation(callbacks: {
   onSwipeLeft?: () => void;
@@ -142,7 +254,6 @@ export function StudyClient({
   const requestedUnitId = initialUnitId;
   const requestedSelectionKey = `${requestedAssignmentId ?? ''}::${requestedUnitId ?? ''}`;
 
-  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [feed, setFeed] = useState<AssignmentSummaryDTO[]>([]);
   const [currentAssignmentId, setCurrentAssignmentId] = useState<string | null>(null);
   const [assignment, setAssignment] = useState<AssignmentDetailDTO | null>(null);
@@ -150,7 +261,6 @@ export function StudyClient({
   const [viewUnitId, setViewUnitId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [deletingAccount, setDeletingAccount] = useState(false);
   const [isReadingChatOpen, setIsReadingChatOpen] = useState(false);
   const [readingChatUnitId, setReadingChatUnitId] = useState<string | null>(null);
   const [readingChatMessage, setReadingChatMessage] = useState('');
@@ -242,8 +352,7 @@ export function StudyClient({
         throw new Error('Unauthorized');
       }
 
-      const meBody = (await meResponse.json()) as { user: { email: string } };
-      setUserEmail(meBody.user.email);
+      await meResponse.json();
 
       await loadFeed();
     } catch (err) {
@@ -303,7 +412,6 @@ export function StudyClient({
   }, [assignmentState]);
 
   const activeUnitId = assignmentState?.currentUnitId ?? units[0]?.id ?? null;
-  const activeUnitIndex = activeUnitId ? units.findIndex((unit) => unit.id === activeUnitId) : -1;
   const effectiveViewUnitId = viewUnitId ?? activeUnitId;
   const viewUnitIndex = effectiveViewUnitId
     ? units.findIndex((unit) => unit.id === effectiveViewUnitId)
@@ -312,6 +420,10 @@ export function StudyClient({
   const currentUnitState = currentUnit ? stateByUnit.get(currentUnit.id) : undefined;
   const selectedReadingUnit =
     readingUnits.find((unit) => unit.id === readingChatUnitId) ?? readingUnits[0] ?? null;
+  const isReadingView = currentUnit?.unitType === 'reading';
+  const essayDisplayTitle = assignment?.title.replace(/^Essay:\s*/i, '') ?? '';
+  const readingOrdinal = viewUnitIndex >= 0 ? viewUnitIndex + 1 : 0;
+  const readingTotal = units.length;
 
   async function persistCurrentUnitBeforeNavigation(): Promise<boolean> {
     if (!workspaceRef.current) {
@@ -367,6 +479,34 @@ export function StudyClient({
 
     const targetIndex = viewUnitIndex + delta;
     if (targetIndex < 0 || targetIndex >= units.length) {
+      return;
+    }
+
+    navigationInFlightRef.current = true;
+    try {
+      const canContinue = await persistCurrentUnitBeforeNavigation();
+      if (!canContinue) {
+        return;
+      }
+
+      setError(null);
+      setViewUnitId(units[targetIndex].id);
+    } finally {
+      navigationInFlightRef.current = false;
+    }
+  }
+
+  async function jumpToCompletedUnit(targetIndex: number) {
+    if (navigationInFlightRef.current) {
+      return;
+    }
+    if (!currentUnit || viewUnitIndex < 0) {
+      return;
+    }
+    if (targetIndex < 0 || targetIndex >= units.length) {
+      return;
+    }
+    if (targetIndex >= viewUnitIndex) {
       return;
     }
 
@@ -604,42 +744,6 @@ export function StudyClient({
     }
   }
 
-  async function logout(event: FormEvent) {
-    event.preventDefault();
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
-  }
-
-  async function deleteAccount() {
-    if (deletingAccount) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      'Delete your account permanently? This will remove all your study progress and cannot be undone.',
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setDeletingAccount(true);
-    setError(null);
-
-    try {
-      const response = await apiFetch('/api/me', { method: 'DELETE' });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        setError(body?.error ?? 'Failed to delete account.');
-        return;
-      }
-      router.push('/login');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete account.');
-    } finally {
-      setDeletingAccount(false);
-    }
-  }
-
   const swipeHandlers = useSwipeNavigation({
     onSwipeLeft: () => {
       void moveAssignment(1);
@@ -773,33 +877,10 @@ export function StudyClient({
   }
 
   return (
-    <main className="container" style={{ paddingTop: 20, paddingBottom: 26 }}>
-      <header className="panel" style={{ marginBottom: 16, padding: 16 }}>
-        <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h1 style={{ margin: 0 }}>Nephix Study Feed</h1>
-            <p className="muted" style={{ margin: '4px 0 0' }}>
-              {userEmail ? `Signed in as ${userEmail}` : 'Signed in'}
-            </p>
-          </div>
-          <div className="row">
-            <button
-              type="button"
-              className="btn btn-danger"
-              onClick={() => void deleteAccount()}
-              disabled={deletingAccount}
-            >
-              {deletingAccount ? 'Deleting...' : 'Delete Account'}
-            </button>
-            <form onSubmit={logout}>
-              <button type="submit" className="btn">
-                Logout
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
-
+    <main
+      className={isReadingView ? 'reading-assistant-page' : 'essay-assistant-page'}
+      style={{ paddingTop: 0, paddingBottom: isReadingView ? 0 : 6 }}
+    >
       {error ? (
         <p className="error" style={{ marginTop: 0 }}>
           {error}
@@ -807,220 +888,238 @@ export function StudyClient({
       ) : null}
 
       <section
-        className="panel"
-        style={{ padding: 16, minHeight: 600 }}
+        className={
+          isReadingView
+            ? 'panel reading-assistant-shell'
+            : 'essay-assistant-shell essay-container'
+        }
+        style={isReadingView ? { padding: 16, minHeight: 600 } : { minHeight: 0 }}
         {...swipeHandlers}
         onWheel={onFeedWheel}
       >
         {assignment && assignmentState && currentUnit ? (
           <>
-            <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                  Assignment {assignmentIndex + 1}/{feed.length} • Swipe left/right or use ← →
-                </p>
-                <h2 style={{ margin: '4px 0 0' }}>{assignment.title}</h2>
-                <p className="muted" style={{ margin: '4px 0 0' }}>
-                  {assignment.subject} • Due {new Date(assignment.deadlineISO).toLocaleDateString()}
-                </p>
+            {isReadingView ? (
+              <div className="reading-assistant-header">
+                <p className="reading-assistant-subject">{assignment.subject}</p>
               </div>
-              <UnitStatusBadge status={currentUnitState?.status ?? 'unread'} />
-            </div>
-
-            <div
-              style={{
-                marginTop: 10,
-                height: 8,
-                borderRadius: 999,
-                background: '#e2e8f0',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  width: `${units.length > 0 ? ((activeUnitIndex + 1) / units.length) * 100 : 0}%`,
-                  background: '#0f766e',
-                  height: '100%',
-                }}
-              />
-            </div>
-
-            <div className="row mobile-stack" style={{ marginTop: 12 }}>
-              <button type="button" className="btn" onClick={() => void moveUnit(-1)} disabled={viewUnitIndex <= 0}>
-                Previous Unit
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => void moveUnit(1)}
-                disabled={viewUnitIndex < 0 || viewUnitIndex >= units.length - 1}
-              >
-                Next Unit
-              </button>
-              {readingUnits.length > 0 ? (
-                <button
-                  type="button"
-                  className="btn btn-soft"
-                  onClick={() => {
-                    setIsReadingChatOpen(true);
-                    setReadingChatError(null);
-                  }}
-                >
-                  Open Clarification Chat
-                </button>
-              ) : null}
-              {currentUnit.unitType === 'reading' ? (
-                <button type="button" className="btn btn-soft" onClick={toggleBookmark}>
-                  {currentUnitState?.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
-                </button>
-              ) : null}
-            </div>
-            {currentUnit.unitType === 'reading' ? (
-              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-                Bookmark saves this reading fragment for later review. It does not change completion progress.
-              </p>
             ) : (
-              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-                Essay flow: check &quot;I confirm...&quot; to save this step, then scroll down to continue.
-              </p>
+              <div className="essay-assistant-header">
+                <h2 className="essay-assistant-title essay-title">{essayDisplayTitle}</h2>
+                <div className="essay-process-path" aria-label="Essay workflow path">
+                  {units.map((unit, index) => {
+                    const isCompleted = index < viewUnitIndex;
+                    const isCurrent = index === viewUnitIndex;
+                    const isLocked = index > viewUnitIndex;
+                    const symbol = isCompleted ? '✓' : isCurrent ? '●' : '○';
+                    const className = `essay-process-step${isCompleted ? ' completed' : ''}${isCurrent ? ' current' : ''}${isLocked ? ' locked' : ''}`;
+                    if (isCompleted) {
+                      return (
+                        <button
+                          key={unit.id}
+                          type="button"
+                          className={`${className} essay-process-step-button`}
+                          onClick={() => void jumpToCompletedUnit(index)}
+                          aria-label={`Go to ${getEssayStepLabel(unit)} step`}
+                          title={`Go to ${getEssayStepLabel(unit)}`}
+                        >
+                          <span className="essay-process-symbol" aria-hidden="true">
+                            {symbol}
+                          </span>
+                          <span className="essay-process-label">{getEssayStepLabel(unit)}</span>
+                        </button>
+                      );
+                    }
+
+                    return (
+                      <span key={unit.id} className={className} aria-disabled={isLocked || isCurrent}>
+                        <span className="essay-process-symbol" aria-hidden="true">
+                          {symbol}
+                        </span>
+                        <span className="essay-process-label">{getEssayStepLabel(unit)}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
             )}
 
-            <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-              Unit {viewUnitIndex + 1}/{units.length} • Swipe/scroll up-down or use ↑ ↓
-            </p>
-
-            <div style={{ marginTop: 14 }}>
+            {!isReadingView ? (
+              <div className="essay-assistant-progress" aria-label="Essay completion progress">
+                <div className="essay-assistant-progress-track">
+                  <div
+                    className="essay-assistant-progress-fill progress-fill"
+                    style={{
+                      width: `${units.length > 0 && viewUnitIndex >= 0 ? ((viewUnitIndex + 1) / units.length) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="essay-assistant-progress-value">
+                  {units.length > 0 && viewUnitIndex >= 0
+                    ? Math.round(((viewUnitIndex + 1) / units.length) * 100)
+                    : 0}
+                  %
+                </span>
+              </div>
+            ) : null}
+            <div className={isReadingView ? 'reading-assistant-workspace' : 'essay-assistant-workspace'} style={{ marginTop: isReadingView ? 14 : 8 }}>
               <UnitWorkspace
                 ref={workspaceRef}
                 unit={currentUnit}
                 unitState={currentUnitState}
                 units={units}
                 unitStateMap={stateByUnit}
-                isActive={currentUnit.id === activeUnitId}
+                isActive={isReadingView ? currentUnit.id === activeUnitId : true}
+                readingOrdinal={readingOrdinal}
+                readingTotal={readingTotal}
+                readingProgressPercent={
+                  readingTotal > 0
+                    ? Math.max(0, Math.min(100, Math.round((readingOrdinal / readingTotal) * 100)))
+                    : 0
+                }
+                onOpenReadingChat={
+                  currentUnit.unitType === 'reading'
+                    ? () => {
+                        setIsReadingChatOpen(true);
+                        setReadingChatError(null);
+                      }
+                    : undefined
+                }
+                onMovePrevUnit={
+                  () => void moveUnit(-1)
+                }
+                onMoveNextUnit={
+                  () => void moveUnit(1)
+                }
+                canMovePrevUnit={viewUnitIndex > 0}
+                canMoveNextUnit={
+                  viewUnitIndex >= 0 && viewUnitIndex < units.length - 1
+                }
                 onPatch={patchUnitState}
                 onRevisionCheck={runRevisionChecks}
                 onGenerateThesisSuggestions={requestThesisSuggestions}
                 onGenerateOutline={requestOutlineGenerate}
                 onRequestWritingHint={requestWritingHint}
+                onCompleteUnit={completeCurrentUnitAndRefresh}
               />
             </div>
-
-            {isReadingChatOpen && selectedReadingUnit ? (
-              <div
-                style={{
-                  position: 'fixed',
-                  inset: 0,
-                  background: 'rgba(15, 23, 42, 0.45)',
-                  zIndex: 70,
-                  display: 'grid',
-                  placeItems: 'center',
-                  padding: 16,
-                }}
-              >
-                <div
-                  className="panel"
-                  style={{
-                    width: 'min(760px, 100%)',
-                    maxHeight: '80vh',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    padding: 14,
-                    overflow: 'hidden',
-                  }}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Clarification chat"
-                >
-                  <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <strong>Clarification Chat</strong>
-                    <button type="button" className="btn btn-sm" onClick={() => setIsReadingChatOpen(false)}>
-                      Close
-                    </button>
-                  </div>
-                  <p className="muted" style={{ margin: 0 }}>
-                    Ask any question. Chat answers are capped at 10 words.
-                  </p>
-
-                  <div
-                    ref={readingChatScrollRef}
-                    style={{
-                      marginTop: 10,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 10,
-                      maxHeight: '48vh',
-                      overflowY: 'auto',
-                      padding: '6px 2px',
+            {!isReadingView ? (
+              <div className="essay-assistant-nav row mobile-stack" style={{ marginTop: 8 }}>
+                {readingUnits.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn-soft"
+                    onClick={() => {
+                      setIsReadingChatOpen(true);
+                      setReadingChatError(null);
                     }}
                   >
+                    Open Clarification Chat
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {isReadingView ? (
+              <div className="reading-assistant-global-left">
+                <button
+                  type="button"
+                  className="reading-assistant-menu-btn icon"
+                  aria-label="Menu"
+                  title="Menu"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4 6h16M4 12h16M4 18h16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            ) : null}
+            {isReadingView ? (
+              <div className="reading-assistant-global-controls">
+                <button
+                  type="button"
+                  className="reading-assistant-bookmark-btn icon"
+                  onClick={toggleBookmark}
+                  aria-label={currentUnitState?.bookmarked ? 'Remove bookmark' : 'Add bookmark'}
+                  title={currentUnitState?.bookmarked ? 'Remove bookmark' : 'Add bookmark'}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1z"
+                      fill={currentUnitState?.bookmarked ? 'currentColor' : 'none'}
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            ) : null}
+
+            {isReadingChatOpen && selectedReadingUnit ? (
+              <div className="reading-chat-modal-overlay">
+                <div className="reading-chat-modal" role="dialog" aria-modal="true" aria-label="Clarification chat">
+                  <button
+                    type="button"
+                    className="reading-chat-modal-close"
+                    onClick={() => setIsReadingChatOpen(false)}
+                    aria-label="Close chat"
+                  >
+                    ×
+                  </button>
+                  <h3 className="reading-chat-modal-title chat-header">Clarification Chat</h3>
+                  <p className="reading-chat-modal-subtitle chat-subtitle">Ask any question.</p>
+
+                  <div ref={readingChatScrollRef} className="reading-chat-modal-messages chat-body">
                     {readingChatLoading ? (
-                      <p className="muted" style={{ margin: 0 }}>
-                        Loading chat...
-                      </p>
+                      <p className="reading-chat-modal-muted">Loading chat...</p>
                     ) : null}
                     {readingChatError ? (
-                      <p className="error" style={{ margin: 0 }}>
-                        {readingChatError}
-                      </p>
+                      <p className="reading-chat-modal-error">{readingChatError}</p>
                     ) : null}
                     {!readingChatLoading && readingChatTurns.length === 0 ? (
-                      <p className="muted" style={{ margin: 0 }}>
-                        Example input: What is the main idea here?
-                      </p>
+                      <div className="reading-chat-modal-empty">
+                        <div className="reading-chat-modal-logo" aria-hidden="true">
+                          <span className="reading-chat-modal-logo-mark" />
+                          <span className="reading-chat-modal-logo-word">nephix</span>
+                        </div>
+                        <p className="reading-chat-modal-empty-text">
+                          Start with a short question about this reading.
+                        </p>
+                      </div>
                     ) : (
                       readingChatTurns.map((turn) => (
-                        <div key={turn.id} style={{ display: 'grid', gap: 8 }}>
-                          <div
-                            style={{
-                              alignSelf: 'flex-end',
-                              maxWidth: '86%',
-                              border: '1px solid #99f6e4',
-                              borderRadius: 12,
-                              background: '#ccfbf1',
-                              padding: '8px 10px',
-                            }}
-                          >
-                            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{turn.userMessage}</p>
-                          </div>
-                          <div
-                            style={{
-                              alignSelf: 'flex-start',
-                              maxWidth: '86%',
-                              border: '1px solid #dbe3ec',
-                              borderRadius: 12,
-                              background: '#f8fafc',
-                              padding: '8px 10px',
-                            }}
-                          >
-                            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{turn.assistantMessage}</p>
-                          </div>
+                        <div key={turn.id} className="reading-chat-modal-turn">
+                          <div className="reading-chat-modal-bubble chat-message user user-message">{turn.userMessage}</div>
+                          <div className="reading-chat-modal-bubble chat-message assistant ai-message">{turn.assistantMessage}</div>
                         </div>
                       ))
                     )}
                   </div>
 
                   <form
-                    className="row mobile-stack"
-                    style={{
-                      marginTop: 10,
-                      alignItems: 'flex-end',
-                    }}
+                    className="reading-chat-modal-compose"
                     onSubmit={(event) => {
                       event.preventDefault();
                       void sendReadingClarificationMessage();
                     }}
                   >
                     <input
+                      className="chat-input"
                       value={readingChatMessage}
                       onChange={(event) => setReadingChatMessage(event.target.value)}
-                      placeholder="Type your question..."
+                      placeholder="Ask about the reading (10 word answers)"
                       disabled={readingChatBusy || readingChatLoading}
                       autoFocus
-                      style={{ flex: 1 }}
                     />
                     <button
                       type="submit"
-                      className="btn btn-sm btn-primary"
+                      className="reading-chat-modal-send send-button"
                       disabled={
                         readingChatBusy ||
                         readingChatLoading ||
@@ -1028,7 +1127,7 @@ export function StudyClient({
                         readingChatMessage.trim().length === 0
                       }
                     >
-                      {readingChatBusy ? 'Sending...' : 'Send'}
+                      {readingChatBusy ? '...' : '↑'}
                     </button>
                   </form>
                 </div>
@@ -1049,6 +1148,14 @@ type UnitWorkspaceProps = {
   units: AssignmentDetailDTO['units'];
   unitStateMap: Map<string, UserUnitStateDTO>;
   isActive: boolean;
+  readingOrdinal: number;
+  readingTotal: number;
+  readingProgressPercent: number;
+  onOpenReadingChat?: () => void;
+  onMovePrevUnit?: () => void;
+  onMoveNextUnit?: () => void;
+  canMovePrevUnit?: boolean;
+  canMoveNextUnit?: boolean;
   onPatch: (unitId: string, payload: PatchUnitStateRequest) => Promise<void>;
   onRevisionCheck: () => Promise<RevisionIssue[]>;
   onGenerateThesisSuggestions: (unitId: string, regenerate: boolean) => Promise<ThesisSuggestion[]>;
@@ -1056,6 +1163,7 @@ type UnitWorkspaceProps = {
     unitId: string,
   ) => Promise<Array<{ id: string; title: string; guidingQuestion: string; targetWords: number }>>;
   onRequestWritingHint: (unitId: string, currentSectionText: string) => Promise<string>;
+  onCompleteUnit?: () => Promise<boolean>;
 };
 
 const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(function UnitWorkspace({
@@ -1064,11 +1172,20 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
   units,
   unitStateMap,
   isActive,
+  readingOrdinal,
+  readingTotal,
+  readingProgressPercent,
+  onOpenReadingChat,
+  onMovePrevUnit,
+  onMoveNextUnit,
+  canMovePrevUnit = false,
+  canMoveNextUnit = false,
   onPatch,
   onRevisionCheck,
   onGenerateThesisSuggestions,
   onGenerateOutline,
   onRequestWritingHint,
+  onCompleteUnit,
 }, ref) {
   const [content, setContent] = useState<Record<string, unknown>>({});
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
@@ -1124,7 +1241,7 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
         };
       })
       .filter((entry): entry is ThesisSuggestion => Boolean(entry));
-    setThesisSuggestions(suggestions);
+    setThesisSuggestions(suggestions.slice(0, 3));
   }, [content, unit.unitType]);
 
   useEffect(() => {
@@ -1160,23 +1277,6 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
     setContent((prev) => ({ ...prev, ...patch }));
   }
 
-  async function setConfirmedAndPersist(confirmed: boolean) {
-    const nextContent = { ...content, confirmed };
-    setContent(nextContent);
-
-    if (!isActive) {
-      return;
-    }
-
-    setSaveState('saving');
-    try {
-      await onPatch(unit.id, { content: nextContent });
-      setSaveState('saved');
-    } catch {
-      setSaveState('error');
-    }
-  }
-
   const persist = useCallback(async () => {
     if (!isActive) {
       return true;
@@ -1207,16 +1307,39 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
     [persist],
   );
 
-  const saveLabel =
-    saveState === 'saving'
-      ? 'Saving...'
-      : saveState === 'saved'
-        ? 'Saved on navigation'
-        : saveState === 'dirty'
-          ? 'Unsaved changes. Move to next/prev to save.'
-        : saveState === 'error'
-          ? 'Save failed'
-          : '';
+  const essayStepFooterNav =
+    unit.unitType !== 'reading' ? (
+      <div className="essay-card-nav row mobile-stack">
+        <button
+          type="button"
+          className="btn button-secondary"
+          onClick={onMovePrevUnit}
+          disabled={!canMovePrevUnit}
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          className="btn button-primary"
+          onClick={() => {
+            if (unit.unitType === 'revise') {
+              void (async () => {
+                const saved = await persist();
+                if (!saved) {
+                  return;
+                }
+                await onCompleteUnit?.();
+              })();
+              return;
+            }
+            onMoveNextUnit?.();
+          }}
+          disabled={unit.unitType === 'revise' ? false : !canMoveNextUnit}
+        >
+          {unit.unitType === 'revise' ? 'Finish' : 'Next'}
+        </button>
+      </div>
+    ) : null;
 
   if (unit.unitType === 'reading') {
     const text = typeof unit.payload.text === 'string' ? unit.payload.text : '';
@@ -1231,95 +1354,90 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
     };
 
     return (
-      <CardShell title={unit.title} subtitle="Read this fragment and move to the next unit when done.">
+      <section className="reading-assistant-window">
         <div
           ref={readingContainerRef}
           onScroll={onReadingScroll}
-          style={{
-            border: '1px solid #dbe3ec',
-            borderRadius: 12,
-            padding: 14,
-            background: '#f8fafc',
-            maxHeight: 320,
-            overflow: 'auto',
-            lineHeight: 1.6,
-          }}
+          className="reading-assistant-fragment-body"
         >
-          {text}
+          <div className="card-wrapper">
+            <div className="reading-assistant-text-plate card">{text}</div>
+          </div>
         </div>
-        <p className="muted" style={{ marginBottom: 0 }}>
-          Use &quot;Open Clarification Chat&quot; for AI help without changing source text.
-        </p>
-      </CardShell>
+        <div className="reading-assistant-inline-progress" aria-label="Reading progress">
+          <div className="reading-assistant-inline-progress-track">
+            <div
+              className="reading-assistant-inline-progress-fill progress-fill"
+              style={{ width: `${readingProgressPercent}%` }}
+            />
+          </div>
+          <span className="reading-assistant-inline-progress-value">{readingProgressPercent}%</span>
+        </div>
+        <div className="reading-assistant-step-nav reading-assistant-step-nav-below">
+          <button
+            type="button"
+            className="reading-assistant-pill-btn button-secondary"
+            onClick={onMovePrevUnit}
+            disabled={!canMovePrevUnit}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="reading-assistant-pill-btn button-primary"
+            onClick={onMoveNextUnit}
+            disabled={!canMoveNextUnit}
+          >
+            Next
+          </button>
+        </div>
+        <div className="reading-assistant-chat-wrap">
+          <button
+            type="button"
+            className="reading-assistant-chat-trigger"
+            onClick={onOpenReadingChat}
+            aria-label="Open clarification chat"
+            title="Open clarification chat"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M4 6.5A3.5 3.5 0 0 1 7.5 3h9A3.5 3.5 0 0 1 20 6.5v5A3.5 3.5 0 0 1 16.5 15H11l-4.8 3.8a.7.7 0 0 1-1.2-.5V15A3.5 3.5 0 0 1 1 11.5v-5A3.5 3.5 0 0 1 4.5 3"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle cx="8.5" cy="9" r="1" fill="currentColor" />
+              <circle cx="12" cy="9" r="1" fill="currentColor" />
+              <circle cx="15.5" cy="9" r="1" fill="currentColor" />
+            </svg>
+          </button>
+          <span className="reading-assistant-unit-counter" aria-label={`Reading ${readingOrdinal} of ${readingTotal}`}>
+            <span className="reading-assistant-unit-counter-short">{readingOrdinal}</span>
+            <span className="reading-assistant-unit-counter-full">{readingOrdinal} of {readingTotal}</span>
+          </span>
+        </div>
+      </section>
     );
   }
 
   if (unit.unitType === 'thesis') {
     const thesis = typeof content.thesis === 'string' ? content.thesis : '';
-    const confirmed = Boolean(content.confirmed);
+    const thesisCharLimit = 200;
+    const hasSuggestions = thesisSuggestions.length > 0;
 
     return (
-      <CardShell title={unit.title} subtitle="Formulate one clear thesis and confirm it.">
-        <label className="field">
-          <span>Thesis statement</span>
-          <textarea
-            value={thesis}
-            onChange={(event) => updateContent({ thesis: event.target.value })}
-            placeholder="Write your thesis in 1-2 sentences..."
-            disabled={!isActive}
-          />
-        </label>
-        <div className="row mobile-stack">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!isActive || thesisSuggestionsBusy}
-            onClick={async () => {
-              setThesisSuggestionsBusy(true);
-              try {
-                const suggestions = await onGenerateThesisSuggestions(unit.id, false);
-                setThesisSuggestions(suggestions);
-                updateContent({ thesisSuggestions: suggestions });
-              } catch {
-                setSaveState('error');
-              } finally {
-                setThesisSuggestionsBusy(false);
-              }
-            }}
-          >
-            {thesisSuggestionsBusy ? 'Generating...' : 'Generate thesis ideas'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!isActive || thesisSuggestionsBusy}
-            onClick={async () => {
-              setThesisSuggestionsBusy(true);
-              try {
-                const suggestions = await onGenerateThesisSuggestions(unit.id, true);
-                setThesisSuggestions(suggestions);
-                updateContent({ thesisSuggestions: suggestions });
-              } catch {
-                setSaveState('error');
-              } finally {
-                setThesisSuggestionsBusy(false);
-              }
-            }}
-          >
-            Regenerate
-          </button>
-        </div>
-        {thesisSuggestions.length > 0 ? (
-          <div style={{ display: 'grid', gap: 8 }}>
-            {thesisSuggestions.map((suggestion) => (
+      <EssayCardShell title={unit.title} noHeaderDivider footer={essayStepFooterNav}>
+        <p className="essay-thesis-suggestions-label">Suggested thesis ideas</p>
+        {hasSuggestions ? (
+          <div className="essay-thesis-suggestions">
+            {thesisSuggestions.map((suggestion, index) => (
               <button
                 key={suggestion.id}
                 type="button"
-                className="btn btn-soft"
-                style={{
-                  textAlign: 'left',
-                  borderColor: suggestion.text === thesis ? '#0d9488' : undefined,
-                }}
+                className={`btn btn-soft suggestion-card${suggestion.text === thesis ? ' selected' : ''}`}
+                style={{ textAlign: 'left' }}
                 disabled={!isActive}
                 onClick={() => {
                   updateContent({
@@ -1327,46 +1445,78 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
                   });
                 }}
               >
-                {suggestion.text}
+                <span className="suggestion-theme-tag">{getSuggestionThemeTag(suggestion.text, index)}</span>
+                <span>{suggestion.text}</span>
               </button>
             ))}
           </div>
         ) : null}
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => {
-              void setConfirmedAndPersist(event.target.checked);
+        <div className="row mobile-stack essay-thesis-generate-row">
+          <button
+            type="button"
+            className="btn btn-sm button-secondary thesis-generate-btn"
+            disabled={!isActive || thesisSuggestionsBusy}
+            onClick={async () => {
+              setThesisSuggestionsBusy(true);
+              try {
+                const suggestions = await onGenerateThesisSuggestions(unit.id, hasSuggestions);
+                const limited = suggestions.slice(0, 3);
+                setThesisSuggestions(limited);
+                updateContent({ thesisSuggestions: limited });
+              } catch {
+                setSaveState('error');
+              } finally {
+                setThesisSuggestionsBusy(false);
+              }
             }}
-            disabled={!isActive}
-          />
-          <span>I confirm this thesis as final for this assignment</span>
-        </label>
+          >
+            <span className="thesis-generate-icon" aria-hidden="true">↻</span>{' '}
+            {thesisSuggestionsBusy
+              ? 'Generating...'
+              : hasSuggestions
+                ? 'Generate new ideas'
+                : 'Generate ideas'}
+          </button>
+        </div>
+        <div className="essay-thesis-or-divider" aria-hidden="true">
+          <span>— or write your own thesis —</span>
+        </div>
+        <textarea
+          className="essay-thesis-input"
+          value={thesis}
+          onChange={(event) => updateContent({ thesis: event.target.value })}
+          placeholder="Write your thesis in 1-2 sentences..."
+          disabled={!isActive}
+        />
         <p className="muted" style={{ margin: 0 }}>
-          {thesis.length} characters. {saveLabel}
+          {thesis.length} / {thesisCharLimit} characters
         </p>
-      </CardShell>
+      </EssayCardShell>
     );
   }
 
   if (unit.unitType === 'outline') {
     const fallbackSections = Array.isArray(unit.payload.sections) ? unit.payload.sections : [];
     const sections = Array.isArray(content.sections) ? content.sections : fallbackSections;
-    const confirmed = Boolean(content.confirmed);
+    const hasGeneratedOutline = Boolean(content.outlineGenerated);
 
     return (
-      <CardShell title={unit.title} subtitle="Adjust section plan while staying close to target word balance.">
-        <div className="row mobile-stack">
+      <EssayCardShell
+        title={unit.title}
+        subtitle="Adjust section plan while staying close to target word balance."
+        footer={essayStepFooterNav}
+      >
+        <p className="outline-plan-top-label">Outline sections</p>
+        <div className="row mobile-stack outline-generate-row">
           <button
             type="button"
-            className="btn btn-sm"
+            className="btn btn-sm button-secondary thesis-generate-btn"
             disabled={!isActive || outlineBusy}
             onClick={async () => {
               setOutlineBusy(true);
               try {
                 const generated = await onGenerateOutline(unit.id);
-                updateContent({ sections: generated });
+                updateContent({ sections: generated, outlineGenerated: true });
               } catch {
                 setSaveState('error');
               } finally {
@@ -1374,126 +1524,72 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
               }
             }}
           >
-            {outlineBusy ? 'Generating...' : 'Generate outline'}
+            <span className="thesis-generate-icon" aria-hidden="true">↻</span>{' '}
+            {outlineBusy ? 'Generating...' : hasGeneratedOutline ? 'Regenerate outline' : 'Generate outline'}
           </button>
         </div>
-        <div className="outline-table-wrap">
-          <table className="outline-table">
-            <thead>
-              <tr>
-                <th scope="col">Section</th>
-                <th scope="col">Guiding Question</th>
-                <th scope="col">Target Words</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sections.map((rawSection, index) => {
-                const section = isObjectRecord(rawSection) ? rawSection : {};
-                const id = typeof section.id === 'string' ? section.id : `section-${index + 1}`;
-                const title = typeof section.title === 'string' ? section.title : '';
-                const guidingQuestion =
-                  typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '';
-                const targetWords =
-                  typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0;
+        <div className="outline-plan-list">
+          {sections.map((rawSection, index) => {
+            const section = isObjectRecord(rawSection) ? rawSection : {};
+            const id = typeof section.id === 'string' ? section.id : `section-${index + 1}`;
+            const title = typeof section.title === 'string' ? section.title : '';
+            const guidingQuestion =
+              typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '';
+            const targetWords =
+              typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0;
 
-                return (
-                  <tr key={id}>
-                    <td>
-                      <input
-                        value={title}
-                        onChange={(event) => {
-                          const next = [...sections];
-                          next[index] = {
-                            ...(isObjectRecord(next[index]) ? next[index] : {}),
-                            id,
-                            title: event.target.value,
-                            guidingQuestion,
-                            targetWords,
-                          };
-                          updateContent({ sections: next });
-                        }}
-                        disabled={!isActive}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={guidingQuestion}
-                        onChange={(event) => {
-                          const next = [...sections];
-                          next[index] = {
-                            ...(isObjectRecord(next[index]) ? next[index] : {}),
-                            id,
-                            title,
-                            guidingQuestion: event.target.value,
-                            targetWords,
-                          };
-                          updateContent({ sections: next });
-                        }}
-                        disabled={!isActive}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        value={targetWords}
-                        onChange={(event) => {
-                          const value = Number(event.target.value);
-                          const bounded = Math.max(0, Number.isFinite(value) ? value : 0);
-                          const next = [...sections];
-                          next[index] = {
-                            ...(isObjectRecord(next[index]) ? next[index] : {}),
-                            id,
-                            title,
-                            guidingQuestion,
-                            targetWords: bounded,
-                          };
-                          updateContent({ sections: next });
-                        }}
-                        disabled={!isActive}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+            return (
+              <article key={id} className="outline-plan-card">
+                <p className="outline-plan-section-label">
+                  {index + 1}. {getOutlineSectionLabel(title, index)}
+                </p>
+                <input
+                  className="outline-plan-prompt-input"
+                  value={guidingQuestion}
+                  onChange={(event) => {
+                    const next = [...sections];
+                    next[index] = {
+                      ...(isObjectRecord(next[index]) ? next[index] : {}),
+                      id,
+                      title,
+                      guidingQuestion: event.target.value,
+                      targetWords,
+                    };
+                    updateContent({ sections: next });
+                  }}
+                  placeholder="Write a guiding question for this section..."
+                  disabled={!isActive}
+                />
+                <p className="outline-plan-length">{getOutlineLengthHint(targetWords)}</p>
+              </article>
+            );
+          })}
         </div>
-
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => {
-              void setConfirmedAndPersist(event.target.checked);
-            }}
-            disabled={!isActive}
-          />
-          <span>I confirm this outline</span>
-        </label>
-        <p className="muted" style={{ margin: 0 }}>
-          {saveLabel}
-        </p>
-      </CardShell>
+      </EssayCardShell>
     );
   }
 
   if (unit.unitType === 'writing') {
     const text = typeof content.text === 'string' ? content.text : '';
-    const confirmed = Boolean(content.confirmed);
     const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
     const hint = typeof content.writingHint === 'string' ? content.writingHint : '';
+    const guidingQuestion =
+      typeof unit.payload.guidingQuestion === 'string' ? unit.payload.guidingQuestion : '';
 
     return (
-      <CardShell title={unit.title} subtitle="Draft this section only. Focus on ideas and flow first.">
-        {typeof unit.payload.guidingQuestion === 'string' ? (
-          <p className="muted" style={{ marginTop: 0 }}>
-            {unit.payload.guidingQuestion}
-          </p>
+      <EssayCardShell
+        title={unit.title}
+        subtitle="Draft this section only. Focus on ideas and flow first."
+        footer={essayStepFooterNav}
+      >
+        <p className="writing-unit-top-label">{getWritingUnitLabel(unit.title)}</p>
+        {guidingQuestion ? (
+          <p className="writing-unit-goal">Goal: {guidingQuestion}</p>
         ) : null}
-        <div className="row mobile-stack">
+        <div className="row mobile-stack writing-hint-row">
           <button
             type="button"
-            className="btn btn-sm"
+            className="btn btn-sm button-secondary thesis-generate-btn"
             disabled={!isActive || writingHintBusy}
             onClick={async () => {
               setWritingHintBusy(true);
@@ -1509,131 +1605,67 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
               }
             }}
           >
+            <span className="writing-hint-icon" aria-hidden="true">+</span>{' '}
             {writingHintBusy ? 'Generating...' : 'Suggest a hint'}
           </button>
         </div>
         {hint ? (
-          <div
-            style={{
-              border: '1px solid #dbe3ec',
-              borderRadius: 12,
-              padding: 10,
-              background: '#f8fafc',
-            }}
-          >
-            <p className="muted" style={{ margin: 0 }}>
-              Hint
-            </p>
-            <p style={{ margin: '4px 0 0' }}>{hint}</p>
+          <div className="writing-hint-panel">
+            <p className="writing-hint-label">Hint</p>
+            <p className="writing-hint-text">{hint}</p>
           </div>
         ) : null}
-        <label className="field">
-          <span>Draft text</span>
-          <textarea
-            value={text}
-            onChange={(event) => updateContent({ text: event.target.value })}
-            disabled={!isActive}
-            style={{ minHeight: 240 }}
-          />
-        </label>
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => {
-              void setConfirmedAndPersist(event.target.checked);
-            }}
-            disabled={!isActive}
-          />
-          <span>I confirm this section draft is ready</span>
-        </label>
-        <p className="muted" style={{ margin: 0 }}>
-          {countWords(text)} words
-          {typeof targetWords === 'number' ? ` (target ${targetWords})` : ''}. {saveLabel}
+        <textarea
+          className="writing-unit-textarea"
+          value={text}
+          onChange={(event) => updateContent({ text: event.target.value })}
+          disabled={!isActive}
+          placeholder="Start drafting this section..."
+        />
+        <p className="writing-unit-counter">
+          {countWords(text)} / {typeof targetWords === 'number' ? targetWords : 150} words
         </p>
-      </CardShell>
+      </EssayCardShell>
     );
   }
 
-  const issues = Array.isArray(content.issues)
-    ? content.issues.filter((issue) => isObjectRecord(issue))
-    : [];
-  const confirmed = Boolean(content.confirmed);
-  const fullDraft = writingSections.map((section) => `## ${section.title}\n${section.text}`).join('\n\n');
-
+  const fullDraft = writingSections
+    .map((section) => section.text.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const revisionDraft = typeof content.revisionDraft === 'string' ? content.revisionDraft : fullDraft;
   return (
-    <CardShell title={unit.title} subtitle="Run rule-based checks and confirm revision goals.">
-      <label className="field">
-        <span>Current draft context (read-only)</span>
-        <textarea value={fullDraft} readOnly style={{ minHeight: 220, background: '#f8fafc' }} />
+    <EssayCardShell
+      title={unit.title}
+      subtitle="Improve clarity and structure."
+      footer={essayStepFooterNav}
+    >
+      <p className="writing-unit-top-label">REVISION</p>
+
+      <label className="field revise-draft-field">
+        <span>Your essay draft</span>
+        <textarea
+          value={revisionDraft}
+          onChange={(event) => updateContent({ revisionDraft: event.target.value })}
+          disabled={!isActive}
+          className="revise-draft-textarea"
+        />
       </label>
 
-      <div className="row">
+      <div className="row revise-analyze-row">
         <button
           type="button"
-          className="btn"
+          className="btn button-secondary thesis-generate-btn"
           onClick={async () => {
             const nextIssues = await onRevisionCheck();
             updateContent({ issues: nextIssues });
           }}
+          disabled={!isActive}
         >
-          Run Revision Checks
+          Analyze draft
         </button>
       </div>
 
-      <div style={{ display: 'grid', gap: 8 }}>
-        {issues.length === 0 ? (
-          <p className="muted" style={{ margin: 0 }}>
-            No issues yet. Run checks to analyze structure and word balance.
-          </p>
-        ) : (
-          issues.map((rawIssue, index) => {
-            const severity =
-              rawIssue.severity === 'high' || rawIssue.severity === 'medium' || rawIssue.severity === 'low'
-                ? rawIssue.severity
-                : 'low';
-            const message = typeof rawIssue.message === 'string' ? rawIssue.message : 'Issue';
-            const sectionTitle =
-              typeof rawIssue.sectionTitle === 'string' ? rawIssue.sectionTitle : undefined;
-
-            return (
-              <div
-                key={`${message}-${index}`}
-                style={{
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 12,
-                  padding: 10,
-                  background:
-                    severity === 'high' ? '#fee2e2' : severity === 'medium' ? '#fef3c7' : '#eff6ff',
-                }}
-              >
-                <strong style={{ textTransform: 'uppercase', fontSize: 12 }}>{severity}</strong>
-                <p style={{ margin: '6px 0 0' }}>{message}</p>
-                {sectionTitle ? (
-                  <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-                    Section: {sectionTitle}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      <label className="row" style={{ alignItems: 'center' }}>
-        <input
-          type="checkbox"
-          checked={confirmed}
-          onChange={(event) => {
-            void setConfirmedAndPersist(event.target.checked);
-          }}
-          disabled={!isActive}
-        />
-        <span>I confirm revision is complete for this assignment.</span>
-      </label>
-      <p className="muted" style={{ margin: 0 }}>
-        {saveLabel}
-      </p>
-    </CardShell>
+    </EssayCardShell>
   );
 });
