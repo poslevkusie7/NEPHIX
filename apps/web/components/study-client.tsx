@@ -32,6 +32,45 @@ type StudyClientProps = {
   initialUnitId?: string | null;
 };
 
+const ASSISTANT_FONT_OPTIONS = [
+  { value: 'serif', label: 'Times New Roman' },
+  { value: 'arial', label: 'Arial' },
+  { value: 'roboto', label: 'Roboto' },
+  { value: 'calibri', label: 'Calibri' },
+  { value: 'open-dyslexic', label: 'Open Dyslexic' },
+  { value: 'comic-sans', label: 'Comic Sans' },
+  { value: 'verdana', label: 'Verdana' },
+  { value: 'lexend', label: 'Lexend' },
+  { value: 'tahoma', label: 'Tahoma' },
+  { value: 'century-gothic', label: 'Century Gothic' },
+  { value: 'gill-sans', label: 'Gill Sans' },
+  { value: 'bbc-reith', label: 'BBC Reith' },
+  { value: 'carnaby-street', label: 'Carnaby Street' },
+  { value: 'bionic-reading', label: 'Bionic Reading' },
+] as const;
+
+type AssistantFontMode = (typeof ASSISTANT_FONT_OPTIONS)[number]['value'];
+
+const ASSISTANT_THEME_OPTIONS = [
+  { value: 'theme-1', label: 'Theme 1', swatch: ['#97acc8', '#051230', '#b6bfc1'] },
+  { value: 'theme-2', label: 'Theme 2', swatch: ['#c2ae93', '#a7d4e4', '#064f6e'] },
+  { value: 'theme-3', label: 'Theme 3', swatch: ['#802626', '#f99d1b', '#b4cdc2'] },
+  { value: 'theme-4', label: 'Theme 4', swatch: ['#bb7125', '#4b3317', '#051230'] },
+  { value: 'theme-5', label: 'Theme 5', swatch: ['#f3a257', '#253122', '#b6bfc1'] },
+  { value: 'theme-6', label: 'Theme 6', swatch: ['#ffffff', '#111111', '#9a9a9a'] },
+  { value: 'theme-7', label: 'Theme 7', swatch: ['#ffffff', '#000000', '#000000'] },
+] as const;
+
+type AssistantThemeMode = (typeof ASSISTANT_THEME_OPTIONS)[number]['value'];
+
+function hasActiveTextSelection(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim().length > 0);
+}
+
 function countWords(text: string): number {
   return text
     .trim()
@@ -83,7 +122,10 @@ function EssayCardShell({ title: _title, subtitle: _subtitle, children, footer, 
   );
 }
 
-function getEssayStepLabel(unit: AssignmentDetailDTO['units'][number]): string {
+function getEssayStepLabel(
+  unit: AssignmentDetailDTO['units'][number],
+  units: AssignmentDetailDTO['units'],
+): string {
   if (unit.unitType === 'thesis') {
     return 'Thesis';
   }
@@ -95,6 +137,8 @@ function getEssayStepLabel(unit: AssignmentDetailDTO['units'][number]): string {
   }
   if (unit.unitType === 'writing') {
     const title = unit.title.toLowerCase();
+    const writingUnits = units.filter((entry) => entry.unitType === 'writing');
+    const writingIndex = writingUnits.findIndex((entry) => entry.id === unit.id);
     if (title.includes('intro')) {
       return 'Intro';
     }
@@ -109,6 +153,25 @@ function getEssayStepLabel(unit: AssignmentDetailDTO['units'][number]): string {
     }
     if (title.includes('body') && title.includes('3')) {
       return 'Body 3';
+    }
+
+    const middleWritingUnits = writingUnits.filter((entry) => {
+      const entryTitle = entry.title.toLowerCase();
+      return !entryTitle.includes('intro') && !entryTitle.includes('conclusion');
+    });
+    const middleIndex = middleWritingUnits.findIndex((entry) => entry.id === unit.id);
+    if (middleIndex >= 0) {
+      return `Body ${middleIndex + 1}`;
+    }
+
+    if (writingIndex === 0) {
+      return 'Intro';
+    }
+    if (writingIndex === writingUnits.length - 1) {
+      return 'Conclusion';
+    }
+    if (writingIndex > 0) {
+      return `Body ${writingIndex}`;
     }
     return 'Writing';
   }
@@ -268,12 +331,17 @@ export function StudyClient({
   const [readingChatLoading, setReadingChatLoading] = useState(false);
   const [readingChatBusy, setReadingChatBusy] = useState(false);
   const [readingChatError, setReadingChatError] = useState<string | null>(null);
+  const [assistantFont, setAssistantFont] = useState<AssistantFontMode>('serif');
+  const [assistantTheme, setAssistantTheme] = useState<AssistantThemeMode>('theme-4');
+  const [readingSlideClass, setReadingSlideClass] = useState('');
   const workspaceRef = useRef<UnitWorkspaceHandle | null>(null);
   const navigationInFlightRef = useRef(false);
   const appliedRequestedSelectionRef = useRef<string | null>(null);
   const readingChatScrollRef = useRef<HTMLDivElement | null>(null);
   const moveAssignmentRef = useRef<(delta: number) => Promise<void>>(async () => undefined);
   const moveUnitRef = useRef<(delta: number) => Promise<void>>(async () => undefined);
+  const navigateReadingRef = useRef<(delta: number) => Promise<void>>(async () => undefined);
+  const readingNavDirectionRef = useRef<'prev' | 'next' | null>(null);
 
   const apiFetch = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -365,6 +433,28 @@ export function StudyClient({
   useEffect(() => {
     loadInitial().catch(() => undefined);
   }, [loadInitial]);
+
+  useEffect(() => {
+    const savedFont = window.localStorage.getItem('nephix-assistant-font');
+    const matchedOption = ASSISTANT_FONT_OPTIONS.find((option) => option.value === savedFont);
+    if (matchedOption) {
+      setAssistantFont(matchedOption.value);
+    }
+
+    const savedTheme = window.localStorage.getItem('nephix-assistant-theme');
+    const matchedTheme = ASSISTANT_THEME_OPTIONS.find((option) => option.value === savedTheme);
+    if (matchedTheme) {
+      setAssistantTheme(matchedTheme.value);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem('nephix-assistant-font', assistantFont);
+  }, [assistantFont]);
+
+  useEffect(() => {
+    window.localStorage.setItem('nephix-assistant-theme', assistantTheme);
+  }, [assistantTheme]);
 
   useEffect(() => {
     if (!currentAssignmentId) {
@@ -496,6 +586,25 @@ export function StudyClient({
     }
   }
 
+  async function navigateReadingRelative(delta: number) {
+    if (navigationInFlightRef.current) {
+      return;
+    }
+    if (!currentUnit || viewUnitIndex < 0) {
+      return;
+    }
+
+    readingNavDirectionRef.current = delta < 0 ? 'prev' : 'next';
+    const targetIndex = viewUnitIndex + delta;
+
+    if (targetIndex >= 0 && targetIndex < units.length) {
+      await moveUnit(delta);
+      return;
+    }
+
+    await moveAssignment(delta);
+  }
+
   async function jumpToCompletedUnit(targetIndex: number) {
     if (navigationInFlightRef.current) {
       return;
@@ -526,6 +635,7 @@ export function StudyClient({
 
   moveAssignmentRef.current = moveAssignment;
   moveUnitRef.current = moveUnit;
+  navigateReadingRef.current = navigateReadingRelative;
 
   async function completeCurrentUnitAndRefresh(): Promise<boolean> {
     if (!currentUnit) {
@@ -810,6 +920,23 @@ export function StudyClient({
   }, [isReadingChatOpen, readingChatTurns]);
 
   useEffect(() => {
+    if (!isReadingView || !currentUnit?.id || !readingNavDirectionRef.current) {
+      return;
+    }
+
+    setReadingSlideClass(
+      readingNavDirectionRef.current === 'next' ? 'reading-slide-next' : 'reading-slide-prev',
+    );
+
+    const timer = window.setTimeout(() => {
+      setReadingSlideClass('');
+      readingNavDirectionRef.current = null;
+    }, 220);
+
+    return () => window.clearTimeout(timer);
+  }, [currentUnit?.id, isReadingView]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target) {
@@ -824,13 +951,25 @@ export function StudyClient({
         }
       }
 
+      if (isReadingChatOpen || hasActiveTextSelection()) {
+        return;
+      }
+
       if (event.key === 'ArrowLeft') {
         event.preventDefault();
+        if (isReadingView) {
+          void navigateReadingRef.current(-1);
+          return;
+        }
         void moveAssignmentRef.current(-1);
         return;
       }
       if (event.key === 'ArrowRight') {
         event.preventDefault();
+        if (isReadingView) {
+          void navigateReadingRef.current(1);
+          return;
+        }
         void moveAssignmentRef.current(1);
         return;
       }
@@ -847,7 +986,17 @@ export function StudyClient({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [isReadingChatOpen, isReadingView]);
+
+  function canUseReadingSideNavigation(target: EventTarget | null): boolean {
+    if (!isReadingView || isReadingChatOpen || hasActiveTextSelection()) {
+      return false;
+    }
+    if (!(target instanceof Element)) {
+      return true;
+    }
+    return !target.closest('input, textarea, select, button, [contenteditable="true"], [role="dialog"]');
+  }
 
   function onFeedWheel(event: ReactWheelEvent<HTMLElement>) {
     const absX = Math.abs(event.deltaX);
@@ -878,13 +1027,46 @@ export function StudyClient({
 
   return (
     <main
-      className={isReadingView ? 'reading-assistant-page' : 'essay-assistant-page'}
+      className={`${isReadingView ? 'reading-assistant-page' : 'essay-assistant-page'} study-font-${assistantFont} study-theme-${assistantTheme}`}
       style={{ paddingTop: 0, paddingBottom: isReadingView ? 0 : 6 }}
     >
       {error ? (
         <p className="error" style={{ marginTop: 0 }}>
           {error}
         </p>
+      ) : null}
+
+      {isReadingView ? (
+        <>
+          <button
+            type="button"
+            className="reading-side-zone reading-side-zone-left"
+            aria-label="Previous"
+            onClick={(event) => {
+              if (!canUseReadingSideNavigation(event.target)) {
+                return;
+              }
+              void navigateReadingRef.current(-1);
+            }}
+          >
+            <span className="reading-side-zone-overlay" />
+            <span className="reading-side-zone-label">← Previous</span>
+          </button>
+          <button
+            type="button"
+            className="reading-side-zone reading-side-zone-right"
+            aria-label="Next"
+            onClick={(event) => {
+              if (!canUseReadingSideNavigation(event.target)) {
+                return;
+              }
+              void navigateReadingRef.current(1);
+            }}
+          >
+            <span className="reading-side-zone-overlay" />
+            <span className="reading-side-zone-label">Next →</span>
+          </button>
+        </>
       ) : null}
 
       <section
@@ -920,13 +1102,13 @@ export function StudyClient({
                           type="button"
                           className={`${className} essay-process-step-button`}
                           onClick={() => void jumpToCompletedUnit(index)}
-                          aria-label={`Go to ${getEssayStepLabel(unit)} step`}
-                          title={`Go to ${getEssayStepLabel(unit)}`}
+                          aria-label={`Go to ${getEssayStepLabel(unit, units)} step`}
+                          title={`Go to ${getEssayStepLabel(unit, units)}`}
                         >
                           <span className="essay-process-symbol" aria-hidden="true">
                             {symbol}
                           </span>
-                          <span className="essay-process-label">{getEssayStepLabel(unit)}</span>
+                          <span className="essay-process-label">{getEssayStepLabel(unit, units)}</span>
                         </button>
                       );
                     }
@@ -936,13 +1118,81 @@ export function StudyClient({
                         <span className="essay-process-symbol" aria-hidden="true">
                           {symbol}
                         </span>
-                        <span className="essay-process-label">{getEssayStepLabel(unit)}</span>
+                        <span className="essay-process-label">{getEssayStepLabel(unit, units)}</span>
                       </span>
                     );
                   })}
                 </div>
               </div>
             )}
+
+            {!isReadingView ? (
+              <div className="essay-assistant-global-controls">
+                <div className="assistant-font-menu">
+                  <button
+                    type="button"
+                    className="assistant-font-trigger icon"
+                    aria-label="Choose font"
+                    title="Choose font"
+                  >
+                    Aa
+                  </button>
+                  <div className="assistant-font-menu-panel" role="menu" aria-label="Font options">
+                    {ASSISTANT_FONT_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`assistant-font-option${assistantFont === option.value ? ' active' : ''}`}
+                        onClick={() => setAssistantFont(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="assistant-theme-menu assistant-font-menu">
+                  <button
+                    type="button"
+                    className="assistant-font-trigger assistant-theme-trigger icon"
+                    aria-label="Choose color theme"
+                    title="Choose color theme"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M12 3a9 9 0 1 0 0 18c1.24 0 2.25-.9 2.25-2.02 0-.48-.2-.94-.2-1.4 0-.87.67-1.58 1.5-1.58h1.8A3.65 3.65 0 0 0 21 12.37 9.37 9.37 0 0 0 12 3Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <circle cx="7.5" cy="11" r="1" fill="currentColor" />
+                      <circle cx="10" cy="7.5" r="1" fill="currentColor" />
+                      <circle cx="14.5" cy="7.5" r="1" fill="currentColor" />
+                      <circle cx="16.5" cy="11.5" r="1" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <div className="assistant-font-menu-panel assistant-theme-menu-panel" role="menu" aria-label="Theme options">
+                    {ASSISTANT_THEME_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`assistant-font-option assistant-theme-option${assistantTheme === option.value ? ' active' : ''}`}
+                        aria-label={option.label}
+                        title={option.label}
+                        onClick={() => setAssistantTheme(option.value)}
+                      >
+                        <span className="assistant-theme-swatch" aria-hidden="true">
+                          {option.swatch.map((color) => (
+                            <span key={color} style={{ backgroundColor: color }} />
+                          ))}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {!isReadingView ? (
               <div className="essay-assistant-progress" aria-label="Essay completion progress">
@@ -962,7 +1212,7 @@ export function StudyClient({
                 </span>
               </div>
             ) : null}
-            <div className={isReadingView ? 'reading-assistant-workspace' : 'essay-assistant-workspace'} style={{ marginTop: isReadingView ? 14 : 8 }}>
+            <div className={isReadingView ? `reading-assistant-workspace ${readingSlideClass}` : 'essay-assistant-workspace'} style={{ marginTop: isReadingView ? 14 : 8 }}>
               <UnitWorkspace
                 ref={workspaceRef}
                 unit={currentUnit}
@@ -986,10 +1236,10 @@ export function StudyClient({
                     : undefined
                 }
                 onMovePrevUnit={
-                  () => void moveUnit(-1)
+                  isReadingView ? () => void navigateReadingRef.current(-1) : () => void moveUnit(-1)
                 }
                 onMoveNextUnit={
-                  () => void moveUnit(1)
+                  isReadingView ? () => void navigateReadingRef.current(1) : () => void moveUnit(1)
                 }
                 canMovePrevUnit={viewUnitIndex > 0}
                 canMoveNextUnit={
@@ -1041,6 +1291,69 @@ export function StudyClient({
             ) : null}
             {isReadingView ? (
               <div className="reading-assistant-global-controls">
+                <div className="assistant-font-menu">
+                  <button
+                    type="button"
+                    className="assistant-font-trigger icon"
+                    aria-label="Choose font"
+                    title="Choose font"
+                  >
+                    Aa
+                  </button>
+                  <div className="assistant-font-menu-panel" role="menu" aria-label="Font options">
+                    {ASSISTANT_FONT_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`assistant-font-option${assistantFont === option.value ? ' active' : ''}`}
+                        onClick={() => setAssistantFont(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="assistant-theme-menu assistant-font-menu">
+                  <button
+                    type="button"
+                    className="assistant-font-trigger assistant-theme-trigger icon"
+                    aria-label="Choose color theme"
+                    title="Choose color theme"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M12 3a9 9 0 1 0 0 18c1.24 0 2.25-.9 2.25-2.02 0-.48-.2-.94-.2-1.4 0-.87.67-1.58 1.5-1.58h1.8A3.65 3.65 0 0 0 21 12.37 9.37 9.37 0 0 0 12 3Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <circle cx="7.5" cy="11" r="1" fill="currentColor" />
+                      <circle cx="10" cy="7.5" r="1" fill="currentColor" />
+                      <circle cx="14.5" cy="7.5" r="1" fill="currentColor" />
+                      <circle cx="16.5" cy="11.5" r="1" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <div className="assistant-font-menu-panel assistant-theme-menu-panel" role="menu" aria-label="Theme options">
+                    {ASSISTANT_THEME_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`assistant-font-option assistant-theme-option${assistantTheme === option.value ? ' active' : ''}`}
+                        aria-label={option.label}
+                        title={option.label}
+                        onClick={() => setAssistantTheme(option.value)}
+                      >
+                        <span className="assistant-theme-swatch" aria-hidden="true">
+                          {option.swatch.map((color) => (
+                            <span key={color} style={{ backgroundColor: color }} />
+                          ))}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <button
                   type="button"
                   className="reading-assistant-bookmark-btn icon"
@@ -1391,7 +1704,7 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
             Next
           </button>
         </div>
-        <div className="reading-assistant-chat-wrap">
+        <div className="reading-assistant-chat-under-nav">
           <button
             type="button"
             className="reading-assistant-chat-trigger"
@@ -1413,6 +1726,8 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
               <circle cx="15.5" cy="9" r="1" fill="currentColor" />
             </svg>
           </button>
+        </div>
+        <div className="reading-assistant-chat-wrap">
           <span className="reading-assistant-unit-counter" aria-label={`Reading ${readingOrdinal} of ${readingTotal}`}>
             <span className="reading-assistant-unit-counter-short">{readingOrdinal}</span>
             <span className="reading-assistant-unit-counter-full">{readingOrdinal} of {readingTotal}</span>
@@ -1643,7 +1958,6 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
       <p className="writing-unit-top-label">REVISION</p>
 
       <label className="field revise-draft-field">
-        <span>Your essay draft</span>
         <textarea
           value={revisionDraft}
           onChange={(event) => updateContent({ revisionDraft: event.target.value })}
