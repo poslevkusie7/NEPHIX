@@ -16,6 +16,14 @@ import type {
   ThesisSuggestion,
   UserUnitStateDTO,
 } from '@nephix/contracts';
+import {
+  EssayCardShell,
+  getWritingUnitLabelForUnit,
+  OutlineEditor,
+  RevisionEditor,
+  ThesisEditor,
+  WritingEditor,
+} from '@/components/essay-unit-ui';
 
 function countWords(text: string): number {
   return text
@@ -183,6 +191,22 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     bookmarkJumpedRef.current = bookmarkUnitId;
   }, [assignment, bookmarkUnitId]);
+
+  function scrollToAdjacentUnit(delta: number) {
+    const currentIndex = units.findIndex((unit) => unit.id === activeUnitId);
+    if (currentIndex < 0) {
+      return;
+    }
+    const nextIndex = currentIndex + delta;
+    if (nextIndex < 0 || nextIndex >= units.length) {
+      return;
+    }
+    const target = document.getElementById(`unit-${units[nextIndex]?.id}`);
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 
   async function patchUnitState(unitId: string, payload: PatchUnitStateRequest): Promise<void> {
     const response = await apiFetch(`/api/units/${unitId}/state`, {
@@ -500,7 +524,32 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
   }
 
   return (
-    <main className="container" style={{ paddingTop: 20, paddingBottom: 26 }}>
+    <main className="container" style={{ paddingTop: 20, paddingBottom: 26, position: 'relative', isolation: 'isolate' }}>
+      <button
+        type="button"
+        className="background-nav-zone background-nav-zone-left"
+        onClick={() => scrollToAdjacentUnit(-1)}
+        disabled={units.findIndex((unit) => unit.id === activeUnitId) <= 0}
+        aria-label="Previous unit"
+        title="Previous unit"
+      >
+        <span className="background-nav-zone-glow" />
+      </button>
+      <button
+        type="button"
+        className="background-nav-zone background-nav-zone-right"
+        onClick={() => scrollToAdjacentUnit(1)}
+        disabled={
+          units.length === 0 ||
+          units.findIndex((unit) => unit.id === activeUnitId) < 0 ||
+          units.findIndex((unit) => unit.id === activeUnitId) >= units.length - 1
+        }
+        aria-label="Next unit"
+        title="Next unit"
+      >
+        <span className="background-nav-zone-glow" />
+      </button>
+      <div style={{ position: 'relative', zIndex: 1 }}>
       <header className="panel" style={{ marginBottom: 16, padding: 16 }}>
         <div className="row mobile-stack" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
@@ -817,6 +866,7 @@ export function AssignmentWorkspaceClient({ assignmentId }: AssignmentWorkspaceC
           </p>
         </section>
       )}
+      </div>
     </main>
   );
 }
@@ -867,7 +917,10 @@ function UnitWorkspace({
   const [thesisSuggestionsBusy, setThesisSuggestionsBusy] = useState(false);
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [writingHintBusy, setWritingHintBusy] = useState(false);
+  const [isWritingHintOpen, setIsWritingHintOpen] = useState(false);
+  const [isThesisReminderOpen, setIsThesisReminderOpen] = useState(false);
   const [revisionPasses, setRevisionPasses] = useState<RevisionPassResult[]>([]);
+  const hasThesisUnit = units.some((entry) => entry.unitType === 'thesis');
 
   useEffect(() => {
     if (initializedUnitRef.current === unit.id) {
@@ -904,6 +957,8 @@ function UnitWorkspace({
 
     initializedUnitRef.current = unit.id;
     setSaveState('idle');
+    setIsWritingHintOpen(typeof contentRef.current.writingHint === 'string' && contentRef.current.writingHint.trim().length > 0);
+    setIsThesisReminderOpen(false);
     setThesisSuggestions(
       Array.isArray(contentRef.current.thesisSuggestions)
         ? (contentRef.current.thesisSuggestions as ThesisSuggestion[])
@@ -1013,32 +1068,6 @@ function UnitWorkspace({
       </div>
     ) : null;
 
-  const writingGuideMap = useMemo(() => {
-    const outlineUnit = units.find((entry) => entry.unitType === 'outline');
-    if (!outlineUnit) {
-      return new Map<string, string>();
-    }
-
-    const outlineState = unitStateMap.get(outlineUnit.id);
-    const outlineContent = isObjectRecord(outlineState?.content) ? outlineState.content : {};
-    const payloadSections = Array.isArray(outlineUnit.payload.sections) ? outlineUnit.payload.sections : [];
-    const contentSections = Array.isArray(outlineContent.sections) ? outlineContent.sections : payloadSections;
-
-    const map = new Map<string, string>();
-    for (const rawSection of contentSections) {
-      if (!isObjectRecord(rawSection)) {
-        continue;
-      }
-      const sectionId = typeof rawSection.id === 'string' ? rawSection.id : '';
-      const question =
-        typeof rawSection.guidingQuestion === 'string' ? rawSection.guidingQuestion.trim() : '';
-      if (sectionId && question) {
-        map.set(sectionId, question);
-      }
-    }
-    return map;
-  }, [unitStateMap, units]);
-
   if (unit.unitType === 'reading') {
     const text = typeof unit.payload.text === 'string' ? unit.payload.text : '';
 
@@ -1090,99 +1119,60 @@ function UnitWorkspace({
     const confirmed = Boolean(content.confirmed);
 
     return (
-      <div style={{ display: 'grid', gap: 10 }}>
-        {gateWarningsBlock}
-        <label className="field">
-          <span>Thesis statement</span>
-          <textarea
-            value={thesis}
-            onChange={(event) => updateContent({ thesis: event.target.value })}
-            placeholder="Write your thesis in 1-2 sentences..."
+      <EssayCardShell title={unit.title} noHeaderDivider>
+        <div style={{ display: 'grid', gap: 10 }}>
+          {gateWarningsBlock}
+          <ThesisEditor
+            thesis={thesis}
+            suggestions={thesisSuggestions}
+            busy={thesisSuggestionsBusy}
             disabled={!isEditable}
+            onGenerateIdeas={() => {
+              void (async () => {
+                setThesisSuggestionsBusy(true);
+                try {
+                  const suggestions = await onGenerateThesisSuggestions(unit.id, thesisSuggestions.length > 0);
+                  setThesisSuggestions(suggestions);
+                  updateContent({ thesisSuggestions: suggestions });
+                } finally {
+                  setThesisSuggestionsBusy(false);
+                }
+              })();
+            }}
+            onSelectSuggestion={(suggestion) => {
+              updateContent({
+                thesis: suggestion.text,
+                confirmed: true,
+              });
+            }}
+            onThesisChange={(value) => updateContent({ thesis: value })}
           />
-        </label>
-        <div className="row mobile-stack">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={thesisSuggestionsBusy}
-            onClick={async () => {
-              setThesisSuggestionsBusy(true);
-              try {
-                const suggestions = await onGenerateThesisSuggestions(unit.id, false);
-                setThesisSuggestions(suggestions);
-                updateContent({ thesisSuggestions: suggestions });
-              } finally {
-                setThesisSuggestionsBusy(false);
-              }
-            }}
-          >
-            {thesisSuggestionsBusy ? 'Generating...' : 'Generate thesis ideas'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={thesisSuggestionsBusy}
-            onClick={async () => {
-              setThesisSuggestionsBusy(true);
-              try {
-                const suggestions = await onGenerateThesisSuggestions(unit.id, true);
-                setThesisSuggestions(suggestions);
-                updateContent({ thesisSuggestions: suggestions });
-              } finally {
-                setThesisSuggestionsBusy(false);
-              }
-            }}
-          >
-            Regenerate
-          </button>
-        </div>
-        {thesisSuggestions.length > 0 ? (
-          <div style={{ display: 'grid', gap: 8 }}>
-            {thesisSuggestions.map((suggestion) => (
-              <button
-                key={suggestion.id}
-                type="button"
-                className="btn btn-soft"
-                style={{
-                  textAlign: 'left',
-                  borderColor: suggestion.text === thesis ? '#0d9488' : undefined,
-                }}
-                onClick={() => {
-                  updateContent({
-                    thesis: suggestion.text,
-                    confirmed: true,
-                  });
-                }}
-              >
-                {suggestion.text}
-              </button>
-            ))}
+          <label className="row" style={{ alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(event) => updateContent({ confirmed: event.target.checked })}
+              disabled={!isEditable}
+            />
+            <span>I confirm this thesis as final.</span>
+          </label>
+          <div className="row" style={{ alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void saveAndMaybeComplete()}
+              disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+            >
+              {saveState === 'saving' ? 'Saving...' : 'Save'}
+            </button>
+            {saveLabel ? (
+              <p className="muted" style={{ margin: 0 }}>
+                {saveLabel}
+              </p>
+            ) : null}
           </div>
-        ) : null}
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => updateContent({ confirmed: event.target.checked })}
-            disabled={!isEditable}
-          />
-          <span>I confirm this thesis as final.</span>
-        </label>
-        <div className="row" style={{ alignItems: 'center' }}>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void saveAndMaybeComplete()}
-            disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
-          >
-            {saveState === 'saving' ? 'Saving...' : 'Save'}
-          </button>
-          <p className="muted" style={{ margin: 0 }}>
-            {thesis.length} characters{saveLabel ? ` • ${saveLabel}` : ''}
-          </p>
         </div>
-      </div>
+      </EssayCardShell>
     );
   }
 
@@ -1192,224 +1182,210 @@ function UnitWorkspace({
     const confirmed = Boolean(content.confirmed);
 
     return (
-      <div style={{ display: 'grid', gap: 10 }}>
-        {gateWarningsBlock}
-        <div className="row mobile-stack">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={outlineBusy}
-            onClick={async () => {
-              setOutlineBusy(true);
-              try {
-                const generated = await onGenerateOutline(unit.id);
-                updateContent({ sections: generated });
-              } finally {
-                setOutlineBusy(false);
-              }
-            }}
-          >
-            {outlineBusy ? 'Generating...' : 'Generate outline'}
-          </button>
-        </div>
-        <div className="outline-table-wrap">
-          <table className="outline-table">
-            <thead>
-              <tr>
-                <th scope="col">Section</th>
-                <th scope="col">Guiding Question</th>
-                <th scope="col">Target Words</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sections.map((rawSection, index) => {
-                const section = isObjectRecord(rawSection) ? rawSection : {};
-                const id = typeof section.id === 'string' ? section.id : `section-${index + 1}`;
-                const title = typeof section.title === 'string' ? section.title : '';
-                const guidingQuestion =
-                  typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '';
-                const targetWords =
-                  typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0;
-
-                return (
-                  <tr key={id}>
-                    <td>
-                      <input
-                        value={title}
-                        onChange={(event) => {
-                          const next = [...sections];
-                          next[index] = {
-                            ...(isObjectRecord(next[index]) ? next[index] : {}),
-                            id,
-                            title: event.target.value,
-                            guidingQuestion,
-                            targetWords,
-                          };
-                          updateContent({ sections: next });
-                        }}
-                        disabled={!isEditable}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={guidingQuestion}
-                        onChange={(event) => {
-                          const next = [...sections];
-                          next[index] = {
-                            ...(isObjectRecord(next[index]) ? next[index] : {}),
-                            id,
-                            title,
-                            guidingQuestion: event.target.value,
-                            targetWords,
-                          };
-                          updateContent({ sections: next });
-                        }}
-                        disabled={!isEditable}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        value={targetWords}
-                        onChange={(event) => {
-                          const value = Number(event.target.value);
-                          const bounded = Math.max(0, Number.isFinite(value) ? value : 0);
-                          const next = [...sections];
-                          next[index] = {
-                            ...(isObjectRecord(next[index]) ? next[index] : {}),
-                            id,
-                            title,
-                            guidingQuestion,
-                            targetWords: bounded,
-                          };
-                          updateContent({ sections: next });
-                        }}
-                        disabled={!isEditable}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => updateContent({ confirmed: event.target.checked })}
+      <EssayCardShell
+        title={unit.title}
+        subtitle="Adjust section plan while staying close to target word balance."
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          {gateWarningsBlock}
+          <OutlineEditor
+            sections={sections.map((rawSection, index) => {
+              const section = isObjectRecord(rawSection) ? rawSection : {};
+              return {
+                id: typeof section.id === 'string' ? section.id : `section-${index + 1}`,
+                title: typeof section.title === 'string' ? section.title : '',
+                guidingQuestion:
+                  typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '',
+                targetWords:
+                  typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0,
+              };
+            })}
+            busy={outlineBusy}
             disabled={!isEditable}
+            hasGeneratedOutline={Boolean(content.outlineGenerated)}
+            onGenerateOutline={() => {
+              void (async () => {
+                setOutlineBusy(true);
+                try {
+                  const generated = await onGenerateOutline(unit.id);
+                  updateContent({ sections: generated, outlineGenerated: true });
+                } finally {
+                  setOutlineBusy(false);
+                }
+              })();
+            }}
+          onGuidingQuestionChange={(index, value) => {
+            const next = [...sections];
+            const current = isObjectRecord(next[index]) ? next[index] : {};
+            next[index] = {
+              ...current,
+                id: typeof current.id === 'string' ? current.id : `section-${index + 1}`,
+                title: typeof current.title === 'string' ? current.title : '',
+                guidingQuestion: value,
+                targetWords:
+                  typeof current.targetWords === 'number' ? current.targetWords : Number(current.targetWords) || 0,
+            };
+            updateContent({ sections: next });
+          }}
+          onTargetWordsChange={(index, value) => {
+            const next = [...sections];
+            const current = isObjectRecord(next[index]) ? next[index] : {};
+            next[index] = {
+              ...current,
+              id: typeof current.id === 'string' ? current.id : `section-${index + 1}`,
+              title: typeof current.title === 'string' ? current.title : '',
+              guidingQuestion:
+                typeof current.guidingQuestion === 'string' ? current.guidingQuestion : '',
+              targetWords: value,
+            };
+            updateContent({ sections: next });
+          }}
           />
-          <span>I confirm this outline.</span>
-        </label>
-        <div className="row" style={{ alignItems: 'center' }}>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void saveAndMaybeComplete()}
-            disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
-          >
-            {saveState === 'saving' ? 'Saving...' : 'Save'}
-          </button>
-          {saveLabel ? (
-            <p className="muted" style={{ margin: 0 }}>
-              {saveLabel}
-            </p>
-          ) : null}
+          <label className="row" style={{ alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(event) => updateContent({ confirmed: event.target.checked })}
+              disabled={!isEditable}
+            />
+            <span>I confirm this outline.</span>
+          </label>
+          <div className="row" style={{ alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void saveAndMaybeComplete()}
+              disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+            >
+              {saveState === 'saving' ? 'Saving...' : 'Save'}
+            </button>
+            {saveLabel ? (
+              <p className="muted" style={{ margin: 0 }}>
+                {saveLabel}
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </EssayCardShell>
     );
   }
 
   if (unit.unitType === 'writing') {
     const text = typeof content.text === 'string' ? content.text : '';
-    const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
     const confirmed = Boolean(content.confirmed);
     const hint = typeof content.writingHint === 'string' ? content.writingHint : '';
     const sectionId = typeof unit.payload.sectionId === 'string' ? unit.payload.sectionId : '';
-    const outlineGuide = sectionId ? writingGuideMap.get(sectionId) : undefined;
-    const guidingQuestion =
-      outlineGuide ??
-      (typeof unit.payload.guidingQuestion === 'string' ? unit.payload.guidingQuestion : '');
+    const outlineUnit = units.find((entry) => entry.unitType === 'outline');
+    const outlineContent = outlineUnit ? unitStateMap.get(outlineUnit.id)?.content : null;
+    const outlineSectionsSource =
+      isObjectRecord(outlineContent) && Array.isArray(outlineContent.sections)
+        ? outlineContent.sections
+        : outlineUnit && Array.isArray(outlineUnit.payload.sections)
+          ? outlineUnit.payload.sections
+          : [];
+    const matchedOutlineSection = outlineSectionsSource.find(
+      (rawSection) => isObjectRecord(rawSection) && rawSection.id === sectionId,
+    );
+    const targetWords =
+      isObjectRecord(matchedOutlineSection) && typeof matchedOutlineSection.targetWords === 'number'
+        ? matchedOutlineSection.targetWords
+        : isObjectRecord(matchedOutlineSection)
+          ? Number(matchedOutlineSection.targetWords) || (typeof unit.targetWords === 'number' ? unit.targetWords : null)
+          : typeof unit.targetWords === 'number'
+            ? unit.targetWords
+            : null;
+    const selectedThesis = (() => {
+      const thesisUnit = units.find((entry) => entry.unitType === 'thesis');
+      if (!thesisUnit) {
+        return '';
+      }
+      const thesisContent = unitStateMap.get(thesisUnit.id)?.content;
+      if (!isObjectRecord(thesisContent)) {
+        return '';
+      }
+      return typeof thesisContent.thesis === 'string' ? thesisContent.thesis.trim() : '';
+    })();
 
     return (
-      <div style={{ display: 'grid', gap: 10 }}>
-        {gateWarningsBlock}
-        {guidingQuestion ? (
-          <p className="muted" style={{ marginTop: 0 }}>
-            {guidingQuestion}
-          </p>
-        ) : null}
-        <div className="row mobile-stack">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={writingHintBusy}
-            onClick={async () => {
-              setWritingHintBusy(true);
-              try {
-                const nextHint = await onRequestWritingHint(unit.id, text);
-                if (nextHint) {
-                  updateContent({ writingHint: nextHint });
+      <EssayCardShell
+        title={unit.title}
+        subtitle="Draft this section only. Focus on ideas and flow first."
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          {gateWarningsBlock}
+          <WritingEditor
+            label={getWritingUnitLabelForUnit(unit, units)}
+            text={text}
+            targetWords={targetWords}
+            hint={hint}
+            hintOpen={isWritingHintOpen}
+            hintBusy={writingHintBusy}
+            disabled={!isEditable}
+            hasThesisReminder={hasThesisUnit}
+            selectedThesis={selectedThesis}
+            thesisReminderOpen={isThesisReminderOpen}
+            onTextChange={(value) => updateContent({ text: value })}
+            onToggleThesisReminder={() => setIsThesisReminderOpen((open) => !open)}
+            onToggleHint={() => {
+              void (async () => {
+                if (hint) {
+                  setIsWritingHintOpen((open) => !open);
+                  return;
                 }
-              } finally {
-                setWritingHintBusy(false);
-              }
+
+                setWritingHintBusy(true);
+                try {
+                  const nextHint = await onRequestWritingHint(unit.id, text);
+                  if (nextHint) {
+                    updateContent({ writingHint: nextHint });
+                    setIsWritingHintOpen(true);
+                  }
+                } finally {
+                  setWritingHintBusy(false);
+                }
+              })();
             }}
-          >
-            {writingHintBusy ? 'Generating...' : 'Suggest a hint'}
-          </button>
-        </div>
-        {hint ? (
-          <div
-            style={{
-              border: '1px solid #dbe3ec',
-              borderRadius: 12,
-              padding: 10,
-              background: '#f8fafc',
+            onRegenerateHint={() => {
+              void (async () => {
+                setWritingHintBusy(true);
+                try {
+                  const nextHint = await onRequestWritingHint(unit.id, text);
+                  if (nextHint) {
+                    updateContent({ writingHint: nextHint });
+                    setIsWritingHintOpen(true);
+                  }
+                } finally {
+                  setWritingHintBusy(false);
+                }
+              })();
             }}
-          >
+          />
+          <label className="row" style={{ alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(event) => updateContent({ confirmed: event.target.checked })}
+              disabled={!isEditable}
+            />
+            <span>I confirm this section draft is ready.</span>
+          </label>
+          <div className="row" style={{ alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void saveAndMaybeComplete()}
+              disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
+            >
+              {saveState === 'saving' ? 'Saving...' : 'Save'}
+            </button>
             <p className="muted" style={{ margin: 0 }}>
-              Hint
+              {countWords(text)} words
+              {typeof targetWords === 'number' ? ` (target ${targetWords})` : ''}
+              {saveLabel ? ` • ${saveLabel}` : ''}
             </p>
-            <p style={{ margin: '4px 0 0' }}>{hint}</p>
           </div>
-        ) : null}
-        <label className="field">
-          <span>Draft text</span>
-          <textarea
-            value={text}
-            onChange={(event) => updateContent({ text: event.target.value })}
-            disabled={!isEditable}
-            style={{ minHeight: 240 }}
-          />
-        </label>
-        <label className="row" style={{ alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => updateContent({ confirmed: event.target.checked })}
-            disabled={!isEditable}
-          />
-          <span>I confirm this section draft is ready.</span>
-        </label>
-        <div className="row" style={{ alignItems: 'center' }}>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void saveAndMaybeComplete()}
-            disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}
-          >
-            {saveState === 'saving' ? 'Saving...' : 'Save'}
-          </button>
-          <p className="muted" style={{ margin: 0 }}>
-            {countWords(text)} words
-            {typeof targetWords === 'number' ? ` (target ${targetWords})` : ''}
-            {saveLabel ? ` • ${saveLabel}` : ''}
-          </p>
         </div>
-      </div>
+      </EssayCardShell>
     );
   }
 
@@ -1437,130 +1413,125 @@ function UnitWorkspace({
         ];
 
   return (
-    <div style={{ display: 'grid', gap: 10 }}>
-      {gateWarningsBlock}
-      <label className="field">
-        <span>Revision draft</span>
-        <textarea
-          value={revisionText}
-          onChange={(event) => updateContent({ revisionText: event.target.value })}
-          style={{ minHeight: 220 }}
-        />
-      </label>
-
-      <div className="row">
-        <button
-          type="button"
-          className="btn"
-          onClick={async () => {
-            const next = await onRevisionCheck();
-            setRevisionPasses(next.passes);
-            updateContent({ issues: next.issues });
-          }}
-          disabled={!isEditable}
-        >
-          Run Revision Checks
-        </button>
-      </div>
-
+    <EssayCardShell
+      title={unit.title}
+      subtitle="Improve clarity and structure."
+    >
       <div style={{ display: 'grid', gap: 10 }}>
-        {passesToRender.every((pass) => pass.issues.length === 0) ? (
-          <p className="muted" style={{ margin: 0 }}>
-            No issues yet. Run checks to analyze structure and word balance.
-          </p>
-        ) : (
-          passesToRender.map((pass) => (
-            <div key={pass.passId} style={{ display: 'grid', gap: 8 }}>
-              <strong style={{ fontSize: 13 }}>{pass.passTitle}</strong>
-              {pass.issues.map((rawIssue, index) => {
-                const severity =
-                  rawIssue.severity === 'high' ||
-                  rawIssue.severity === 'medium' ||
-                  rawIssue.severity === 'low'
-                    ? rawIssue.severity
-                    : 'low';
-                const message = typeof rawIssue.message === 'string' ? rawIssue.message : 'Issue';
-                const sectionTitle =
-                  typeof rawIssue.sectionTitle === 'string' ? rawIssue.sectionTitle : undefined;
-                const issueKey = issueActionKey(rawIssue);
-                const actionStatus = issueActions[issueKey] ?? rawIssue.actionStatus ?? 'open';
-
-                return (
-                  <div
-                    key={`${pass.passId}-${message}-${index}`}
-                    style={{
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 12,
-                      padding: 10,
-                      background:
-                        severity === 'high' ? '#fee2e2' : severity === 'medium' ? '#fef3c7' : '#eff6ff',
-                      display: 'grid',
-                      gap: 6,
-                    }}
-                  >
-                    <strong style={{ textTransform: 'uppercase', fontSize: 12 }}>{severity}</strong>
-                    <p style={{ margin: 0 }}>{message}</p>
-                    {sectionTitle ? (
-                      <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-                        Section: {sectionTitle}
-                      </p>
-                    ) : null}
-                    <div className="row mobile-stack">
-                      {(['open', 'postponed', 'ignored', 'resolved'] as const).map((status) => (
-                        <button
-                          key={status}
-                          type="button"
-                          className="btn btn-sm"
-                          style={{
-                            borderColor: actionStatus === status ? '#0d9488' : undefined,
-                          }}
-                          onClick={() => {
-                            const nextActions = {
-                              ...issueActions,
-                              [issueKey]: status,
-                            };
-                            updateContent({
-                              issueActions: nextActions,
-                              lastIssueAction: {
-                                issueKey,
-                                status,
-                              },
-                            });
-                          }}
-                        >
-                          {status}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))
-        )}
-      </div>
-
-      <label className="row" style={{ alignItems: 'center' }}>
-        <input
-          type="checkbox"
-          checked={confirmed}
-          onChange={(event) => {
-            updateContent({ confirmed: event.target.checked });
-          }}
+        {gateWarningsBlock}
+        <RevisionEditor
+          draft={revisionText}
           disabled={!isEditable}
+          onDraftChange={(value) => updateContent({ revisionText: value })}
+          onAnalyze={() => {
+            void (async () => {
+              const next = await onRevisionCheck();
+              setRevisionPasses(next.passes);
+              updateContent({ issues: next.issues });
+            })();
+          }}
+          analyzeLabel="Run Revision Checks"
         />
-        <span>Confirm completion</span>
-      </label>
-      <div className="row" style={{ alignItems: 'center' }}>
-        <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
-          {saveState === 'saving' ? 'Saving...' : 'Save'}
-        </button>
-        {saveLabel ? (
-          <p className="muted" style={{ margin: 0 }}>
-            {saveLabel}
-          </p>
-        ) : null}
+
+        <div style={{ display: 'grid', gap: 10 }}>
+          {passesToRender.every((pass) => pass.issues.length === 0) ? (
+            <p className="muted" style={{ margin: 0 }}>
+              No issues yet. Run checks to analyze structure and word balance.
+            </p>
+          ) : (
+            passesToRender.map((pass) => (
+              <div key={pass.passId} style={{ display: 'grid', gap: 8 }}>
+                <strong style={{ fontSize: 13 }}>{pass.passTitle}</strong>
+                {pass.issues.map((rawIssue, index) => {
+                  const severity =
+                    rawIssue.severity === 'high' ||
+                    rawIssue.severity === 'medium' ||
+                    rawIssue.severity === 'low'
+                      ? rawIssue.severity
+                      : 'low';
+                  const message = typeof rawIssue.message === 'string' ? rawIssue.message : 'Issue';
+                  const sectionTitle =
+                    typeof rawIssue.sectionTitle === 'string' ? rawIssue.sectionTitle : undefined;
+                  const issueKey = issueActionKey(rawIssue);
+                  const actionStatus = issueActions[issueKey] ?? rawIssue.actionStatus ?? 'open';
+
+                  return (
+                    <div
+                      key={`${pass.passId}-${message}-${index}`}
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 12,
+                        padding: 10,
+                        background:
+                          severity === 'high' ? '#fee2e2' : severity === 'medium' ? '#fef3c7' : '#eff6ff',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <strong style={{ textTransform: 'uppercase', fontSize: 12 }}>{severity}</strong>
+                      <p style={{ margin: 0 }}>{message}</p>
+                      {sectionTitle ? (
+                        <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                          Section: {sectionTitle}
+                        </p>
+                      ) : null}
+                      <div className="row mobile-stack">
+                        {(['open', 'postponed', 'ignored', 'resolved'] as const).map((status) => (
+                          <button
+                            key={status}
+                            type="button"
+                            className="btn btn-sm"
+                            style={{
+                              borderColor: actionStatus === status ? '#0d9488' : undefined,
+                            }}
+                            onClick={() => {
+                              const nextActions = {
+                                ...issueActions,
+                                [issueKey]: status,
+                              };
+                              updateContent({
+                                issueActions: nextActions,
+                                lastIssueAction: {
+                                  issueKey,
+                                  status,
+                                },
+                              });
+                            }}
+                          >
+                            {status}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))
+          )}
+        </div>
+
+        <label className="row" style={{ alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(event) => {
+              updateContent({ confirmed: event.target.checked });
+            }}
+            disabled={!isEditable}
+          />
+          <span>Confirm completion</span>
+        </label>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <button type="button" className="btn" onClick={() => void saveAndMaybeComplete()} disabled={!isEditable || saveState === 'saving' || completingUnitId === unit.id}>
+            {saveState === 'saving' ? 'Saving...' : 'Save'}
+          </button>
+          {saveLabel ? (
+            <p className="muted" style={{ margin: 0 }}>
+              {saveLabel}
+            </p>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </EssayCardShell>
   );
 }

@@ -2,7 +2,6 @@
 
 import { useRouter } from 'next/navigation';
 import {
-  type ReactNode,
   WheelEvent as ReactWheelEvent,
   forwardRef,
   PointerEvent as ReactPointerEvent,
@@ -26,6 +25,15 @@ import type {
   ThesisSuggestion,
   UserUnitStateDTO,
 } from '@nephix/contracts';
+import {
+  EssayCardShell,
+  getWritingUnitLabelForUnit,
+  OutlineEditor,
+  RevisionEditor,
+  ThesisEditor,
+  WritingEditor,
+} from '@/components/essay-unit-ui';
+import { AnimatedContourBackground } from '@/components/animated-contour-background';
 
 type StudyClientProps = {
   initialAssignmentId?: string | null;
@@ -33,20 +41,9 @@ type StudyClientProps = {
 };
 
 const ASSISTANT_FONT_OPTIONS = [
-  { value: 'serif', label: 'Times New Roman' },
   { value: 'arial', label: 'Arial' },
-  { value: 'roboto', label: 'Roboto' },
-  { value: 'calibri', label: 'Calibri' },
   { value: 'open-dyslexic', label: 'Open Dyslexic' },
-  { value: 'comic-sans', label: 'Comic Sans' },
-  { value: 'verdana', label: 'Verdana' },
-  { value: 'lexend', label: 'Lexend' },
-  { value: 'tahoma', label: 'Tahoma' },
-  { value: 'century-gothic', label: 'Century Gothic' },
   { value: 'gill-sans', label: 'Gill Sans' },
-  { value: 'bbc-reith', label: 'BBC Reith' },
-  { value: 'carnaby-street', label: 'Carnaby Street' },
-  { value: 'bionic-reading', label: 'Bionic Reading' },
 ] as const;
 
 type AssistantFontMode = (typeof ASSISTANT_FONT_OPTIONS)[number]['value'];
@@ -59,6 +56,7 @@ const ASSISTANT_THEME_OPTIONS = [
   { value: 'theme-5', label: 'Theme 5', swatch: ['#f3a257', '#253122', '#b6bfc1'] },
   { value: 'theme-6', label: 'Theme 6', swatch: ['#ffffff', '#111111', '#9a9a9a'] },
   { value: 'theme-7', label: 'Theme 7', swatch: ['#ffffff', '#000000', '#000000'] },
+  { value: 'theme-8', label: 'Black & White', swatch: ['#ffffff', '#000000', '#6f6f6f'] },
 ] as const;
 
 type AssistantThemeMode = (typeof ASSISTANT_THEME_OPTIONS)[number]['value'];
@@ -104,23 +102,6 @@ type SwipeHandlers = {
 type UnitWorkspaceHandle = {
   persist: () => Promise<boolean>;
 };
-
-type EssayCardShellProps = {
-  title: string;
-  subtitle?: string;
-  children: ReactNode;
-  footer?: ReactNode;
-  noHeaderDivider?: boolean;
-};
-
-function EssayCardShell({ title: _title, subtitle: _subtitle, children, footer, noHeaderDivider = false }: EssayCardShellProps) {
-  return (
-    <section className={`essay-unit-card${noHeaderDivider ? ' no-header-divider' : ''}`}>
-      <div className="essay-unit-card-body">{children}</div>
-      {footer ? <footer className="essay-unit-card-footer">{footer}</footer> : null}
-    </section>
-  );
-}
 
 function getEssayStepLabel(
   unit: AssignmentDetailDTO['units'][number],
@@ -178,67 +159,6 @@ function getEssayStepLabel(
   return unit.title;
 }
 
-function getSuggestionThemeTag(text: string, index: number): string {
-  const normalized = text.toLowerCase();
-  if (normalized.includes('social') || normalized.includes('class') || normalized.includes('mobility')) {
-    return 'SOCIAL MOBILITY';
-  }
-  if (normalized.includes('love') || normalized.includes('romantic') || normalized.includes('ruth')) {
-    return 'ROMANTIC IDEALIZATION';
-  }
-  if (normalized.includes('individual') || normalized.includes('independ') || normalized.includes('isolation')) {
-    return 'INDIVIDUALISM';
-  }
-  const fallback = ['AMBITION', 'IDENTITY', 'CONFLICT'];
-  return fallback[index % fallback.length];
-}
-
-function getOutlineSectionLabel(title: string, index: number): string {
-  const normalized = title.toLowerCase();
-  if (normalized.includes('intro')) {
-    return 'Introduction';
-  }
-  if (normalized.includes('conclusion')) {
-    return 'Conclusion';
-  }
-  if (normalized.includes('body') && normalized.includes('1')) {
-    return 'Body 1';
-  }
-  if (normalized.includes('body') && normalized.includes('2')) {
-    return 'Body 2';
-  }
-  if (normalized.includes('body') && normalized.includes('3')) {
-    return 'Body 3';
-  }
-  return `Section ${index + 1}`;
-}
-
-function getOutlineLengthHint(targetWords: number): string {
-  if (targetWords > 0) {
-    return `~${targetWords} words`;
-  }
-  return '~150 words';
-}
-
-function getWritingUnitLabel(title: string): string {
-  const normalized = title.toLowerCase();
-  if (normalized.includes('intro')) {
-    return 'INTRODUCTION';
-  }
-  if (normalized.includes('conclusion')) {
-    return 'CONCLUSION';
-  }
-  if (normalized.includes('body') && normalized.includes('1')) {
-    return 'BODY PARAGRAPH 1';
-  }
-  if (normalized.includes('body') && normalized.includes('2')) {
-    return 'BODY PARAGRAPH 2';
-  }
-  if (normalized.includes('body') && normalized.includes('3')) {
-    return 'BODY PARAGRAPH 3';
-  }
-  return title.toUpperCase();
-}
 
 type RevisionFocus = 'clarity' | 'structure' | 'argument' | 'style';
 
@@ -331,8 +251,9 @@ export function StudyClient({
   const [readingChatLoading, setReadingChatLoading] = useState(false);
   const [readingChatBusy, setReadingChatBusy] = useState(false);
   const [readingChatError, setReadingChatError] = useState<string | null>(null);
-  const [assistantFont, setAssistantFont] = useState<AssistantFontMode>('serif');
+  const [assistantFont, setAssistantFont] = useState<AssistantFontMode>('arial');
   const [assistantTheme, setAssistantTheme] = useState<AssistantThemeMode>('theme-4');
+  const [isContourBackgroundEnabled, setIsContourBackgroundEnabled] = useState(false);
   const [readingSlideClass, setReadingSlideClass] = useState('');
   const workspaceRef = useRef<UnitWorkspaceHandle | null>(null);
   const navigationInFlightRef = useRef(false);
@@ -439,6 +360,8 @@ export function StudyClient({
     const matchedOption = ASSISTANT_FONT_OPTIONS.find((option) => option.value === savedFont);
     if (matchedOption) {
       setAssistantFont(matchedOption.value);
+    } else if (savedFont) {
+      window.localStorage.setItem('nephix-assistant-font', 'arial');
     }
 
     const savedTheme = window.localStorage.getItem('nephix-assistant-theme');
@@ -605,7 +528,7 @@ export function StudyClient({
     await moveAssignment(delta);
   }
 
-  async function jumpToCompletedUnit(targetIndex: number) {
+  async function jumpToUnit(targetIndex: number) {
     if (navigationInFlightRef.current) {
       return;
     }
@@ -615,7 +538,7 @@ export function StudyClient({
     if (targetIndex < 0 || targetIndex >= units.length) {
       return;
     }
-    if (targetIndex >= viewUnitIndex) {
+    if (targetIndex === viewUnitIndex) {
       return;
     }
 
@@ -1030,57 +953,69 @@ export function StudyClient({
       className={`${isReadingView ? 'reading-assistant-page' : 'essay-assistant-page'} study-font-${assistantFont} study-theme-${assistantTheme}`}
       style={{ paddingTop: 0, paddingBottom: isReadingView ? 0 : 6 }}
     >
-      {error ? (
-        <p className="error" style={{ marginTop: 0 }}>
-          {error}
-        </p>
+      {isContourBackgroundEnabled ? (
+        <AnimatedContourBackground
+          className={isReadingView ? 'assistant-contour-background--reading' : 'assistant-contour-background--essay'}
+          lineColor="#06d681"
+          lineOpacity={0.82}
+          glowOpacity={0.1}
+          speedSeconds={isReadingView ? 13 : 11.5}
+          blurPx={4}
+          intensity={1}
+          centerFade={0}
+        />
       ) : null}
-
-      {isReadingView ? (
-        <>
-          <button
-            type="button"
-            className="reading-side-zone reading-side-zone-left"
-            aria-label="Previous"
-            onClick={(event) => {
-              if (!canUseReadingSideNavigation(event.target)) {
-                return;
-              }
-              void navigateReadingRef.current(-1);
-            }}
-          >
-            <span className="reading-side-zone-overlay" />
-            <span className="reading-side-zone-label">← Previous</span>
-          </button>
-          <button
-            type="button"
-            className="reading-side-zone reading-side-zone-right"
-            aria-label="Next"
-            onClick={(event) => {
-              if (!canUseReadingSideNavigation(event.target)) {
-                return;
-              }
-              void navigateReadingRef.current(1);
-            }}
-          >
-            <span className="reading-side-zone-overlay" />
-            <span className="reading-side-zone-label">Next →</span>
-          </button>
-        </>
-      ) : null}
-
-      <section
-        className={
-          isReadingView
-            ? 'panel reading-assistant-shell'
-            : 'essay-assistant-shell essay-container'
-        }
-        style={isReadingView ? { padding: 16, minHeight: 600 } : { minHeight: 0 }}
-        {...swipeHandlers}
-        onWheel={onFeedWheel}
+      <button
+        type="button"
+        className="background-nav-zone background-nav-zone-left"
+        onClick={() => {
+          if (isReadingView) {
+            void navigateReadingRef.current(-1);
+            return;
+          }
+          void moveUnit(-1);
+        }}
+        disabled={viewUnitIndex <= 0}
+        aria-label={isReadingView ? 'Previous reading unit' : 'Previous unit'}
+        title={isReadingView ? 'Previous reading unit' : 'Previous unit'}
       >
-        {assignment && assignmentState && currentUnit ? (
-          <>
+        <span className="background-nav-zone-glow" />
+      </button>
+      <button
+        type="button"
+        className="background-nav-zone background-nav-zone-right"
+        onClick={() => {
+          if (isReadingView) {
+            void navigateReadingRef.current(1);
+            return;
+          }
+          void moveUnit(1);
+        }}
+        disabled={viewUnitIndex < 0 || viewUnitIndex >= units.length - 1}
+        aria-label={isReadingView ? 'Next reading unit' : 'Next unit'}
+        title={isReadingView ? 'Next reading unit' : 'Next unit'}
+      >
+        <span className="background-nav-zone-glow" />
+      </button>
+      <div className="assistant-screen-content">
+        {error ? (
+          <p className="error" style={{ marginTop: 0 }}>
+            {error}
+          </p>
+        ) : null}
+
+        <section
+          className={
+            isReadingView
+              ? 'panel reading-assistant-shell'
+              : 'essay-assistant-shell essay-container'
+          }
+          style={isReadingView ? { padding: 16, minHeight: 600 } : { minHeight: 0 }}
+          {...swipeHandlers}
+          onWheel={onFeedWheel}
+        >
+          {assignment && assignmentState && currentUnit ? (
+            <>
             {isReadingView ? (
               <div className="reading-assistant-header">
                 <p className="reading-assistant-subject">{assignment.subject}</p>
@@ -1095,31 +1030,23 @@ export function StudyClient({
                     const isLocked = index > viewUnitIndex;
                     const symbol = isCompleted ? '✓' : isCurrent ? '●' : '○';
                     const className = `essay-process-step${isCompleted ? ' completed' : ''}${isCurrent ? ' current' : ''}${isLocked ? ' locked' : ''}`;
-                    if (isCompleted) {
-                      return (
-                        <button
-                          key={unit.id}
-                          type="button"
-                          className={`${className} essay-process-step-button`}
-                          onClick={() => void jumpToCompletedUnit(index)}
-                          aria-label={`Go to ${getEssayStepLabel(unit, units)} step`}
-                          title={`Go to ${getEssayStepLabel(unit, units)}`}
-                        >
-                          <span className="essay-process-symbol" aria-hidden="true">
-                            {symbol}
-                          </span>
-                          <span className="essay-process-label">{getEssayStepLabel(unit, units)}</span>
-                        </button>
-                      );
-                    }
-
+                    const stepLabel = getEssayStepLabel(unit, units);
                     return (
-                      <span key={unit.id} className={className} aria-disabled={isLocked || isCurrent}>
+                      <button
+                        key={unit.id}
+                        type="button"
+                        className={`${className} essay-process-step-button`}
+                        onClick={() => void jumpToUnit(index)}
+                        aria-current={isCurrent ? 'step' : undefined}
+                        aria-label={`Go to ${stepLabel} step`}
+                        title={`Go to ${stepLabel}`}
+                        disabled={isCurrent}
+                      >
                         <span className="essay-process-symbol" aria-hidden="true">
                           {symbol}
                         </span>
-                        <span className="essay-process-label">{getEssayStepLabel(unit, units)}</span>
-                      </span>
+                        <span className="essay-process-label">{stepLabel}</span>
+                      </button>
                     );
                   })}
                 </div>
@@ -1183,19 +1110,47 @@ export function StudyClient({
                         onClick={() => setAssistantTheme(option.value)}
                       >
                         <span className="assistant-theme-swatch" aria-hidden="true">
-                          {option.swatch.map((color) => (
-                            <span key={color} style={{ backgroundColor: color }} />
+                          {option.swatch.map((color, colorIndex) => (
+                            <span key={`${option.value}-${colorIndex}-${color}`} style={{ backgroundColor: color }} />
                           ))}
                         </span>
                       </button>
                     ))}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className={`assistant-animation-toggle assistant-font-trigger icon${isContourBackgroundEnabled ? ' active' : ''}`}
+                  onClick={() => setIsContourBackgroundEnabled((current) => !current)}
+                  aria-pressed={isContourBackgroundEnabled}
+                  aria-label={isContourBackgroundEnabled ? 'Turn off background animation' : 'Turn on background animation'}
+                  title={isContourBackgroundEnabled ? 'Turn off background animation' : 'Turn on background animation'}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4.5 12c2.1-3.7 4.6-5.5 7.5-5.5s5.4 1.8 7.5 5.5c-2.1 3.7-4.6 5.5-7.5 5.5S6.6 15.7 4.5 12Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M7.8 12c1.1-1.7 2.5-2.5 4.2-2.5s3.1.8 4.2 2.5c-1.1 1.7-2.5 2.5-4.2 2.5S8.9 13.7 7.8 12Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
               </div>
             ) : null}
 
             {!isReadingView ? (
-              <div className="essay-assistant-progress" aria-label="Essay completion progress">
+              <div
+                className={`essay-assistant-progress${currentUnit.unitType === 'outline' || currentUnit.unitType === 'revise' ? ' essay-assistant-progress-compact' : ''}`}
+                aria-label="Essay completion progress"
+              >
                 <div className="essay-assistant-progress-track">
                   <div
                     className="essay-assistant-progress-fill progress-fill"
@@ -1346,14 +1301,39 @@ export function StudyClient({
                         onClick={() => setAssistantTheme(option.value)}
                       >
                         <span className="assistant-theme-swatch" aria-hidden="true">
-                          {option.swatch.map((color) => (
-                            <span key={color} style={{ backgroundColor: color }} />
+                          {option.swatch.map((color, colorIndex) => (
+                            <span key={`${option.value}-${colorIndex}-${color}`} style={{ backgroundColor: color }} />
                           ))}
                         </span>
                       </button>
                     ))}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className={`assistant-animation-toggle assistant-font-trigger icon${isContourBackgroundEnabled ? ' active' : ''}`}
+                  onClick={() => setIsContourBackgroundEnabled((current) => !current)}
+                  aria-pressed={isContourBackgroundEnabled}
+                  aria-label={isContourBackgroundEnabled ? 'Turn off background animation' : 'Turn on background animation'}
+                  title={isContourBackgroundEnabled ? 'Turn off background animation' : 'Turn on background animation'}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4.5 12c2.1-3.7 4.6-5.5 7.5-5.5s5.4 1.8 7.5 5.5c-2.1 3.7-4.6 5.5-7.5 5.5S6.6 15.7 4.5 12Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M7.8 12c1.1-1.7 2.5-2.5 4.2-2.5s3.1.8 4.2 2.5c-1.1 1.7-2.5 2.5-4.2 2.5S8.9 13.7 7.8 12Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
                 <button
                   type="button"
                   className="reading-assistant-bookmark-btn icon"
@@ -1446,11 +1426,12 @@ export function StudyClient({
                 </div>
               </div>
             ) : null}
-          </>
-        ) : (
-          <p className="muted">No active assignment in the feed yet.</p>
-        )}
-      </section>
+            </>
+          ) : (
+            <p className="muted">No active assignment in the feed yet.</p>
+          )}
+        </section>
+      </div>
     </main>
   );
 }
@@ -1507,6 +1488,20 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
   const [thesisSuggestionsBusy, setThesisSuggestionsBusy] = useState(false);
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [writingHintBusy, setWritingHintBusy] = useState(false);
+  const [isWritingHintOpen, setIsWritingHintOpen] = useState(false);
+  const [isThesisReminderOpen, setIsThesisReminderOpen] = useState(false);
+  const hasThesisUnit = units.some((entry) => entry.unitType === 'thesis');
+  const selectedThesis = (() => {
+    const thesisUnit = units.find((entry) => entry.unitType === 'thesis');
+    if (!thesisUnit) {
+      return '';
+    }
+    const thesisContent = unitStateMap.get(thesisUnit.id)?.content;
+    if (!isObjectRecord(thesisContent)) {
+      return '';
+    }
+    return typeof thesisContent.thesis === 'string' ? thesisContent.thesis.trim() : '';
+  })();
 
   useEffect(() => {
     const existing = unitState?.content;
@@ -1529,6 +1524,18 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
 
     setSaveState('idle');
   }, [unit.id, unit.unitType, unit.payload, unitState?.updatedAtISO, unitState?.content]);
+
+  useEffect(() => {
+    const existingHint =
+      isObjectRecord(unitState?.content) && typeof unitState.content.writingHint === 'string'
+        ? unitState.content.writingHint.trim()
+        : '';
+    setIsWritingHintOpen(existingHint.length > 0);
+  }, [unit.id, unitState?.content]);
+
+  useEffect(() => {
+    setIsThesisReminderOpen(false);
+  }, [unit.id]);
 
   useEffect(() => {
     if (unit.unitType !== 'thesis') {
@@ -1620,39 +1627,7 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
     [persist],
   );
 
-  const essayStepFooterNav =
-    unit.unitType !== 'reading' ? (
-      <div className="essay-card-nav row mobile-stack">
-        <button
-          type="button"
-          className="btn button-secondary"
-          onClick={onMovePrevUnit}
-          disabled={!canMovePrevUnit}
-        >
-          Previous
-        </button>
-        <button
-          type="button"
-          className="btn button-primary"
-          onClick={() => {
-            if (unit.unitType === 'revise') {
-              void (async () => {
-                const saved = await persist();
-                if (!saved) {
-                  return;
-                }
-                await onCompleteUnit?.();
-              })();
-              return;
-            }
-            onMoveNextUnit?.();
-          }}
-          disabled={unit.unitType === 'revise' ? false : !canMoveNextUnit}
-        >
-          {unit.unitType === 'revise' ? 'Finish' : 'Next'}
-        </button>
-      </div>
-    ) : null;
+  const essayStepFooterNav = null;
 
   if (unit.unitType === 'reading') {
     const text = typeof unit.payload.text === 'string' ? unit.payload.text : '';
@@ -1685,24 +1660,6 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
             />
           </div>
           <span className="reading-assistant-inline-progress-value">{readingProgressPercent}%</span>
-        </div>
-        <div className="reading-assistant-step-nav reading-assistant-step-nav-below">
-          <button
-            type="button"
-            className="reading-assistant-pill-btn button-secondary"
-            onClick={onMovePrevUnit}
-            disabled={!canMovePrevUnit}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            className="reading-assistant-pill-btn button-primary"
-            onClick={onMoveNextUnit}
-            disabled={!canMoveNextUnit}
-          >
-            Next
-          </button>
         </div>
         <div className="reading-assistant-chat-under-nav">
           <button
@@ -1739,42 +1696,19 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
 
   if (unit.unitType === 'thesis') {
     const thesis = typeof content.thesis === 'string' ? content.thesis : '';
-    const thesisCharLimit = 200;
-    const hasSuggestions = thesisSuggestions.length > 0;
 
     return (
       <EssayCardShell title={unit.title} noHeaderDivider footer={essayStepFooterNav}>
-        <p className="essay-thesis-suggestions-label">Suggested thesis ideas</p>
-        {hasSuggestions ? (
-          <div className="essay-thesis-suggestions">
-            {thesisSuggestions.map((suggestion, index) => (
-              <button
-                key={suggestion.id}
-                type="button"
-                className={`btn btn-soft suggestion-card${suggestion.text === thesis ? ' selected' : ''}`}
-                style={{ textAlign: 'left' }}
-                disabled={!isActive}
-                onClick={() => {
-                  updateContent({
-                    thesis: suggestion.text,
-                  });
-                }}
-              >
-                <span className="suggestion-theme-tag">{getSuggestionThemeTag(suggestion.text, index)}</span>
-                <span>{suggestion.text}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <div className="row mobile-stack essay-thesis-generate-row">
-          <button
-            type="button"
-            className="btn btn-sm button-secondary thesis-generate-btn"
-            disabled={!isActive || thesisSuggestionsBusy}
-            onClick={async () => {
+        <ThesisEditor
+          thesis={thesis}
+          suggestions={thesisSuggestions}
+          busy={thesisSuggestionsBusy}
+          disabled={!isActive}
+          onGenerateIdeas={() => {
+            void (async () => {
               setThesisSuggestionsBusy(true);
               try {
-                const suggestions = await onGenerateThesisSuggestions(unit.id, hasSuggestions);
+                const suggestions = await onGenerateThesisSuggestions(unit.id, thesisSuggestions.length > 0);
                 const limited = suggestions.slice(0, 3);
                 setThesisSuggestions(limited);
                 updateContent({ thesisSuggestions: limited });
@@ -1783,29 +1717,15 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
               } finally {
                 setThesisSuggestionsBusy(false);
               }
-            }}
-          >
-            <span className="thesis-generate-icon" aria-hidden="true">↻</span>{' '}
-            {thesisSuggestionsBusy
-              ? 'Generating...'
-              : hasSuggestions
-                ? 'Generate new ideas'
-                : 'Generate ideas'}
-          </button>
-        </div>
-        <div className="essay-thesis-or-divider" aria-hidden="true">
-          <span>— or write your own thesis —</span>
-        </div>
-        <textarea
-          className="essay-thesis-input"
-          value={thesis}
-          onChange={(event) => updateContent({ thesis: event.target.value })}
-          placeholder="Write your thesis in 1-2 sentences..."
-          disabled={!isActive}
+            })();
+          }}
+          onSelectSuggestion={(suggestion) => {
+            updateContent({
+              thesis: suggestion.text,
+            });
+          }}
+          onThesisChange={(value) => updateContent({ thesis: value })}
         />
-        <p className="muted" style={{ margin: 0 }}>
-          {thesis.length} / {thesisCharLimit} characters
-        </p>
       </EssayCardShell>
     );
   }
@@ -1821,13 +1741,23 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
         subtitle="Adjust section plan while staying close to target word balance."
         footer={essayStepFooterNav}
       >
-        <p className="outline-plan-top-label">Outline sections</p>
-        <div className="row mobile-stack outline-generate-row">
-          <button
-            type="button"
-            className="btn btn-sm button-secondary thesis-generate-btn"
-            disabled={!isActive || outlineBusy}
-            onClick={async () => {
+        <OutlineEditor
+          sections={sections.map((rawSection, index) => {
+            const section = isObjectRecord(rawSection) ? rawSection : {};
+            return {
+              id: typeof section.id === 'string' ? section.id : `section-${index + 1}`,
+              title: typeof section.title === 'string' ? section.title : '',
+              guidingQuestion:
+                typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '',
+              targetWords:
+                typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0,
+            };
+          })}
+          busy={outlineBusy}
+          disabled={!isActive}
+          hasGeneratedOutline={hasGeneratedOutline}
+          onGenerateOutline={() => {
+            void (async () => {
               setOutlineBusy(true);
               try {
                 const generated = await onGenerateOutline(unit.id);
@@ -1837,59 +1767,62 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
               } finally {
                 setOutlineBusy(false);
               }
-            }}
-          >
-            <span className="thesis-generate-icon" aria-hidden="true">↻</span>{' '}
-            {outlineBusy ? 'Generating...' : hasGeneratedOutline ? 'Regenerate outline' : 'Generate outline'}
-          </button>
-        </div>
-        <div className="outline-plan-list">
-          {sections.map((rawSection, index) => {
-            const section = isObjectRecord(rawSection) ? rawSection : {};
-            const id = typeof section.id === 'string' ? section.id : `section-${index + 1}`;
-            const title = typeof section.title === 'string' ? section.title : '';
-            const guidingQuestion =
-              typeof section.guidingQuestion === 'string' ? section.guidingQuestion : '';
-            const targetWords =
-              typeof section.targetWords === 'number' ? section.targetWords : Number(section.targetWords) || 0;
-
-            return (
-              <article key={id} className="outline-plan-card">
-                <p className="outline-plan-section-label">
-                  {index + 1}. {getOutlineSectionLabel(title, index)}
-                </p>
-                <input
-                  className="outline-plan-prompt-input"
-                  value={guidingQuestion}
-                  onChange={(event) => {
-                    const next = [...sections];
-                    next[index] = {
-                      ...(isObjectRecord(next[index]) ? next[index] : {}),
-                      id,
-                      title,
-                      guidingQuestion: event.target.value,
-                      targetWords,
-                    };
-                    updateContent({ sections: next });
-                  }}
-                  placeholder="Write a guiding question for this section..."
-                  disabled={!isActive}
-                />
-                <p className="outline-plan-length">{getOutlineLengthHint(targetWords)}</p>
-              </article>
-            );
-          })}
-        </div>
+            })();
+          }}
+          onGuidingQuestionChange={(index, value) => {
+            const next = [...sections];
+            const current = isObjectRecord(next[index]) ? next[index] : {};
+            next[index] = {
+              ...current,
+              id: typeof current.id === 'string' ? current.id : `section-${index + 1}`,
+              title: typeof current.title === 'string' ? current.title : '',
+              guidingQuestion: value,
+              targetWords:
+                typeof current.targetWords === 'number' ? current.targetWords : Number(current.targetWords) || 0,
+            };
+            updateContent({ sections: next });
+          }}
+          onTargetWordsChange={(index, value) => {
+            const next = [...sections];
+            const current = isObjectRecord(next[index]) ? next[index] : {};
+            next[index] = {
+              ...current,
+              id: typeof current.id === 'string' ? current.id : `section-${index + 1}`,
+              title: typeof current.title === 'string' ? current.title : '',
+              guidingQuestion:
+                typeof current.guidingQuestion === 'string' ? current.guidingQuestion : '',
+              targetWords: value,
+            };
+            updateContent({ sections: next });
+          }}
+        />
       </EssayCardShell>
     );
   }
 
   if (unit.unitType === 'writing') {
     const text = typeof content.text === 'string' ? content.text : '';
-    const targetWords = typeof unit.targetWords === 'number' ? unit.targetWords : null;
     const hint = typeof content.writingHint === 'string' ? content.writingHint : '';
-    const guidingQuestion =
-      typeof unit.payload.guidingQuestion === 'string' ? unit.payload.guidingQuestion : '';
+    const sectionId = typeof unit.payload.sectionId === 'string' ? unit.payload.sectionId : '';
+    const outlineUnit = units.find((entry) => entry.unitType === 'outline');
+    const outlineContent = outlineUnit ? unitStateMap.get(outlineUnit.id)?.content : null;
+    const outlineSectionsSource =
+      isObjectRecord(outlineContent) && Array.isArray(outlineContent.sections)
+        ? outlineContent.sections
+        : outlineUnit && Array.isArray(outlineUnit.payload.sections)
+          ? outlineUnit.payload.sections
+          : [];
+    const matchedOutlineSection = outlineSectionsSource.find(
+      (rawSection) => isObjectRecord(rawSection) && rawSection.id === sectionId,
+    );
+    const targetWords =
+      isObjectRecord(matchedOutlineSection) && typeof matchedOutlineSection.targetWords === 'number'
+        ? matchedOutlineSection.targetWords
+        : isObjectRecord(matchedOutlineSection)
+          ? Number(matchedOutlineSection.targetWords) || (typeof unit.targetWords === 'number' ? unit.targetWords : null)
+          : typeof unit.targetWords === 'number'
+            ? unit.targetWords
+            : null;
 
     return (
       <EssayCardShell
@@ -1897,49 +1830,57 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
         subtitle="Draft this section only. Focus on ideas and flow first."
         footer={essayStepFooterNav}
       >
-        <p className="writing-unit-top-label">{getWritingUnitLabel(unit.title)}</p>
-        {guidingQuestion ? (
-          <p className="writing-unit-goal">Goal: {guidingQuestion}</p>
-        ) : null}
-        <div className="row mobile-stack writing-hint-row">
-          <button
-            type="button"
-            className="btn btn-sm button-secondary thesis-generate-btn"
-            disabled={!isActive || writingHintBusy}
-            onClick={async () => {
+        <WritingEditor
+          label={getWritingUnitLabelForUnit(unit, units)}
+          text={text}
+          targetWords={targetWords}
+          hint={hint}
+          hintOpen={isWritingHintOpen}
+          hintBusy={writingHintBusy}
+          disabled={!isActive}
+          hasThesisReminder={hasThesisUnit}
+          selectedThesis={selectedThesis}
+          thesisReminderOpen={isThesisReminderOpen}
+          onTextChange={(value) => updateContent({ text: value })}
+          onToggleThesisReminder={() => setIsThesisReminderOpen((open) => !open)}
+          onToggleHint={() => {
+            void (async () => {
+              if (hint) {
+                setIsWritingHintOpen((open) => !open);
+                return;
+              }
+
               setWritingHintBusy(true);
               try {
                 const nextHint = await onRequestWritingHint(unit.id, text);
                 if (nextHint) {
                   updateContent({ writingHint: nextHint });
+                  setIsWritingHintOpen(true);
                 }
               } catch {
                 setSaveState('error');
               } finally {
                 setWritingHintBusy(false);
               }
-            }}
-          >
-            <span className="writing-hint-icon" aria-hidden="true">+</span>{' '}
-            {writingHintBusy ? 'Generating...' : 'Suggest a hint'}
-          </button>
-        </div>
-        {hint ? (
-          <div className="writing-hint-panel">
-            <p className="writing-hint-label">Hint</p>
-            <p className="writing-hint-text">{hint}</p>
-          </div>
-        ) : null}
-        <textarea
-          className="writing-unit-textarea"
-          value={text}
-          onChange={(event) => updateContent({ text: event.target.value })}
-          disabled={!isActive}
-          placeholder="Start drafting this section..."
+            })();
+          }}
+          onRegenerateHint={() => {
+            void (async () => {
+              setWritingHintBusy(true);
+              try {
+                const nextHint = await onRequestWritingHint(unit.id, text);
+                if (nextHint) {
+                  updateContent({ writingHint: nextHint });
+                  setIsWritingHintOpen(true);
+                }
+              } catch {
+                setSaveState('error');
+              } finally {
+                setWritingHintBusy(false);
+              }
+            })();
+          }}
         />
-        <p className="writing-unit-counter">
-          {countWords(text)} / {typeof targetWords === 'number' ? targetWords : 150} words
-        </p>
       </EssayCardShell>
     );
   }
@@ -1955,31 +1896,18 @@ const UnitWorkspace = forwardRef<UnitWorkspaceHandle, UnitWorkspaceProps>(functi
       subtitle="Improve clarity and structure."
       footer={essayStepFooterNav}
     >
-      <p className="writing-unit-top-label">REVISION</p>
-
-      <label className="field revise-draft-field">
-        <textarea
-          value={revisionDraft}
-          onChange={(event) => updateContent({ revisionDraft: event.target.value })}
-          disabled={!isActive}
-          className="revise-draft-textarea"
-        />
-      </label>
-
-      <div className="row revise-analyze-row">
-        <button
-          type="button"
-          className="btn button-secondary thesis-generate-btn"
-          onClick={async () => {
+      <RevisionEditor
+        draft={revisionDraft}
+        disabled={!isActive}
+        onDraftChange={(value) => updateContent({ revisionDraft: value })}
+        onAnalyze={() => {
+          void (async () => {
             const nextIssues = await onRevisionCheck();
             updateContent({ issues: nextIssues });
-          }}
-          disabled={!isActive}
-        >
-          Analyze draft
-        </button>
-      </div>
-
+          })();
+        }}
+        analyzeLabel="Analyze draft"
+      />
     </EssayCardShell>
   );
 });
